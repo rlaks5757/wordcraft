@@ -8,6 +8,9 @@ pub const MAX_ROWS: usize = 50;
 pub const MAX_COLS: usize = 20;
 pub const MAX_CELL_CHARS: usize = 1000;
 
+/// The refusal text for a caret or selection in a table; the host page matches on it.
+pub const IN_TABLE: &str = "the caret is inside a table";
+
 /// `rows` as cell texts for `insert.table`, or why the request is refused. Line breaks and tabs
 /// in a cell become spaces: a cell holds one line of text.
 pub fn table_data(rows: &[Vec<String>]) -> Result<serde_json::Value, String> {
@@ -29,6 +32,11 @@ pub fn table_data(rows: &[Vec<String>]) -> Result<serde_json::Value, String> {
 /// Insert the table at the caret. An `Err` leaves the document as it was.
 pub fn insert_table(app: &mut WordApp, rows: &[Vec<String>]) -> Result<(), String> {
     let data = table_data(rows)?;
+    // A table inside a cell would merge into the one around it; the page asks the user to move out.
+    let sel = &app.session.sel;
+    if sel.anchor.path.cell().is_some() || sel.focus.path.cell().is_some() {
+        return Err(IN_TABLE.into());
+    }
     app.run("insert.table", serde_json::json!({ "data": data })).map(|_| ())
 }
 
@@ -69,6 +77,26 @@ mod tests {
         }
         assert!(!a.session.dirty);
         assert!(a.session.doc.body.iter().all(|b| b.as_table().is_none()));
+    }
+
+    #[test]
+    fn a_caret_or_selection_in_a_table_is_refused_and_leaves_the_table_alone() {
+        let mut a = app();
+        insert_table(&mut a, &rows(&[&["a", "b"]])).unwrap();
+        a.run("edit.undo", serde_json::json!({})).unwrap();
+        insert_table(&mut a, &rows(&[&["a", "b"]])).unwrap();
+        // The engine leaves the caret in the first cell of a table it inserted.
+        assert!(a.session.sel.focus.path.cell().is_some());
+        let before = a.session.doc.plain_text(StoryRef::Body);
+        let err = insert_table(&mut a, &rows(&[&["Name", "Qty"], &["{{loop items}}{{name}}", "{{qty}}{{endloop}}"]]));
+        assert!(err.is_err(), "a table does not go into a table cell");
+        assert_eq!(a.session.doc.plain_text(StoryRef::Body), before);
+        assert_eq!(a.session.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
+        // A selection that only ends in a cell is refused too.
+        let mut sel = a.session.sel.clone();
+        sel.anchor = wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0]), off: 0 };
+        a.session.sel = sel;
+        assert!(insert_table(&mut a, &rows(&[&["x", "y"]])).is_err());
     }
 
     #[test]

@@ -8586,7 +8586,8 @@ fn insert_table_inside_a_cell_stays_consistent() {
     assert!(s.sel.focus.path.cell().is_some(), "the caret is in the first cell");
     let r = s.run("insert.table", &json!({"data": loop_rows()}));
     let tables = |s: &Session| s.doc.body.iter().filter(|b| b.as_table().is_some()).count();
-    // Either a table nested in the cell or a refusal; never a half-made change.
+    // The engine nests the table in the cell (top-level count stays 1, so this cannot see the
+    // merge). The host refuses before this point: ui-egui host_table.rs tests the real path.
     match r {
         Ok(_) => {
             run(&mut s, "edit.undo", json!({}));
