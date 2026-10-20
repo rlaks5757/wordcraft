@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         }),
         CommandSpec::new("insert.coverPage", "Cover Page", "Insert › Pages", cover_page).params(r#"{"title"?: string, "subtitle"?: string, "author"?: string}"#),
-        CommandSpec::new("insert.table", "Table", "Insert › Tables", table).params(r#"{"rows": n, "cols": n, "style"?: string}"#),
+        CommandSpec::new("insert.table", "Table", "Insert › Tables", table).params(r#"{"rows": n, "cols": n, "style"?: string, "data"?: [[string]] (cell texts; rows and cols come from it, and a table without `style` gets Table Grid)}"#),
         CommandSpec::new("insert.picture", "Pictures", "Insert › Illustrations", picture).params(r#"{"path"?: string, "data"?: base64, "width"?: pt, "alt"?: string}"#),
         CommandSpec::new("insert.icon", "Icons", "Insert › Illustrations", icon)
             .params(r#"{"id"?: string (omit to list the library), "color"?: "RRGGBB", "size"?: pt, "query"?: string, "category"?: string}"#),
@@ -149,13 +149,24 @@ fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError
 }
 
 fn table(s: &mut Session, v: &Value) -> CmdResult {
-    let rows = p::u64(v, "rows").unwrap_or(2).clamp(1, 1000) as usize;
-    let cols = p::u64(v, "cols").unwrap_or(2).clamp(1, 63) as usize;
+    let data = table_data(v)?;
+    let rows = data.as_ref().map_or_else(|| p::u64(v, "rows").unwrap_or(2).clamp(1, 1000) as usize, Vec::len);
+    let cols = data.as_ref().map_or_else(|| p::u64(v, "cols").unwrap_or(2).clamp(1, 63) as usize, |d| d.iter().map(Vec::len).max().unwrap_or(1));
     let width = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
     let mut t = Table::new(rows, cols, width);
     if let Some(st) = p::str(v, "style") {
         let id = s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
         t.props.style = Some(id);
+    } else if data.is_some() {
+        // A table with texts from the host has visible borders, like one made by Convert Text to Table in a styled document.
+        t.props.style = s.doc.styles.find("Table Grid").map(|x| x.id.clone());
+    }
+    for (r, line) in data.iter().flatten().enumerate() {
+        for (c, txt) in line.iter().enumerate() {
+            if let Some(cl) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) {
+                cl.blocks = vec![para_block(Paragraph::with_text(txt, Default::default()))];
+            }
+        }
     }
     // Like Word, a table inserted in a right-to-left paragraph is a right-to-left table (#2634):
     // its first cell stands at the right, so Tab, which follows reading order, moves leftwards.
@@ -168,6 +179,22 @@ fn table(s: &mut Session, v: &Value) -> CmdResult {
     first.extend([0, 0, 0]);
     s.sel = Selection::caret(Pos { story, path: Path(first), off: 0 });
     Ok(json!({"table": path.0}))
+}
+
+/// `data`: the cell texts of a table, one array of strings per row. A row may be shorter than the
+/// widest; its missing cells stay empty.
+fn table_data(v: &Value) -> Result<Option<Vec<Vec<String>>>, CmdError> {
+    let Some(d) = v.get("data").filter(|d| !d.is_null()) else { return Ok(None) };
+    let bad = || CmdError::Params("`data` must be rows (1 to 32767) of 1 to 63 strings".into());
+    let rows = d.as_array().filter(|r| (1..=wordcraft_doc::table::MAX_ROWS).contains(&r.len())).ok_or_else(bad)?;
+    let rows = rows
+        .iter()
+        .map(|r| {
+            let cells = r.as_array().filter(|c| (1..=wordcraft_doc::table::MAX_COLS).contains(&c.len())).ok_or_else(bad)?;
+            cells.iter().map(|c| c.as_str().map(str::to_string).ok_or_else(bad)).collect()
+        })
+        .collect::<Result<Vec<Vec<String>>, CmdError>>()?;
+    Ok(Some(rows))
 }
 
 /// Minimal base64 (standard alphabet, padding optional, whitespace ignored).

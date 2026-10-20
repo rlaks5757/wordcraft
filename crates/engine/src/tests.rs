@@ -8491,3 +8491,59 @@ fn rtf_list_round_trip_keeps_text() {
         assert_eq!(d.plain_text(StoryRef::Body), "first\nsecond", "{cmd}");
     }
 }
+
+/// What the host's "insert a loop table" request sends: a header row and a loop row whose start
+/// and end markers sit in different cells of the same row.
+fn loop_rows() -> serde_json::Value {
+    json!([["Name", "Qty"], ["{{loop items}}{{name}}", "{{qty}}{{endloop}}"]])
+}
+
+#[test]
+fn insert_table_with_data_fills_cells_at_the_caret_and_undoes() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("before\nafter"));
+    run(&mut s, "select.text", json!({"text": "before"}));
+    run(&mut s, "select.collapse", json!({"end": true}));
+    let before = s.dirty;
+    run(&mut s, "insert.table", json!({"data": loop_rows()}));
+    assert!(s.dirty && !before);
+    assert_eq!(
+        table_texts(&s),
+        [["Name", "Qty"].map(String::from).to_vec(), ["{{loop items}}{{name}}", "{{qty}}{{endloop}}"].map(String::from).to_vec()]
+    );
+    // The caret ended the first paragraph: the table follows it, then the empty paragraph the split left, then the second.
+    let kinds: Vec<bool> = s.doc.body.iter().map(|b| b.as_table().is_some()).collect();
+    assert_eq!(kinds, [false, true, false, false]);
+    assert!(s.doc.body[1].as_table().unwrap().props.style.is_some(), "Table Grid borders");
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.body.iter().all(|b| b.as_table().is_none()));
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(table_texts(&s).len(), 2);
+}
+
+#[test]
+fn insert_table_with_data_survives_docx_and_pads_short_rows() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"data": [["a", "b", "c"], ["d"]]}));
+    assert_eq!(table_texts(&s)[1], ["d", "", ""]);
+    let s = s_with_loop_table();
+    let bytes = crate::io::save_bytes("x.docx", &s.doc).unwrap();
+    let d = crate::io::open_bytes("x.docx", &bytes).unwrap();
+    let t = d.body.iter().find_map(|b| b.as_table()).expect("a table after save and open");
+    let text = |r: usize, c: usize| t.rows[r].cells[c].blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<String>();
+    assert_eq!((text(1, 0).as_str(), text(1, 1).as_str()), ("{{loop items}}{{name}}", "{{qty}}{{endloop}}"));
+}
+
+fn s_with_loop_table() -> Session {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"data": loop_rows()}));
+    s
+}
+
+#[test]
+fn insert_table_refuses_malformed_data() {
+    let mut s = s();
+    for data in [json!([]), json!([[]]), json!("x"), json!([["a", 1]]), json!(["a"]), json!([vec!["x"; 64]])] {
+        assert!(s.run("insert.table", &json!({"data": data})).is_err(), "{data}");
+    }
+    assert!(s.doc.body.iter().all(|b| b.as_table().is_none()));
+}

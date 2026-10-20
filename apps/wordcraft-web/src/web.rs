@@ -94,7 +94,7 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, bridge: app_bridge }))
                 }),
             )
             .await;
@@ -125,6 +125,7 @@ struct WebShell {
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
+    bridge: Option<crate::host::Bridge>,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -156,6 +157,9 @@ impl eframe::App for WebShell {
         let msgs = std::mem::take(&mut *self.messages.borrow_mut());
         for msg in msgs {
             self.app.status(msg);
+        }
+        if let Some(bridge) = &self.bridge {
+            bridge.deliver_tables(&mut self.app);
         }
         self.app.logic(ctx);
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).

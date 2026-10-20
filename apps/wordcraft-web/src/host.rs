@@ -9,21 +9,36 @@
 //!   (such as PDF). The parent stores it and reports failures itself.
 //! - `wordcraft:dirty` (to the parent): `{ dirty }` whenever unsaved changes appear or go away.
 //! - `wordcraft:failed` (to the parent): `{ error }` when the app couldn't start.
+//! - `wordcraft:insert-table` (from the parent): `{ id, rows }`, rows an array of arrays of
+//!   strings. It inserts a table with those cell texts at the caret, as one undo step.
+//! - `wordcraft:table-inserted` (to the parent): `{ id }` when it did.
+//! - `wordcraft:table-failed` (to the parent): `{ id, error }` when it couldn't (bad rows, a
+//!   document that refuses the table).
 //!
 //! Only the parent window on the page's own origin is heard or answered. With a parent on another
 //! origin there is no bridge: the app runs as if unframed. In host mode the page starts on an
 //! empty document (no Start screen, no sample).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
+use wordcraft_ui_egui::host_table::{self, MAX_COLS, MAX_ROWS};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
+
+/// The longest request id taken from the parent.
+const MAX_ID_BYTES: usize = 200;
+
+/// A table the parent asked for: its request id and the rows, or why they couldn't be read.
+struct TableRequest {
+    id: String,
+    rows: Result<Vec<Vec<String>>, String>,
+}
 
 #[derive(Clone)]
 pub struct Bridge {
@@ -32,6 +47,8 @@ pub struct Bridge {
     origin: String,
     /// The unsaved-changes state last reported to the parent.
     reported: Rc<Cell<Option<bool>>>,
+    /// Tables from the parent not yet inserted.
+    tables: Rc<RefCell<Vec<TableRequest>>>,
 }
 
 impl Bridge {
@@ -47,7 +64,7 @@ impl Bridge {
         if parent.location().origin().ok()? != origin {
             return None;
         }
-        Some(Self { window, parent, origin, reported: Rc::default() })
+        Some(Self { window, parent, origin, reported: Rc::default(), tables: Rc::default() })
     }
 
     /// Send saved and exported files to the parent instead of downloading them, report the dirty
@@ -87,6 +104,16 @@ impl Bridge {
         self.send(&[("type", "wordcraft:failed".into()), ("error", error.into())]);
     }
 
+    /// Before each pass: tables from the parent go in at the caret and the parent hears how each went.
+    pub fn deliver_tables(&self, app: &mut WordApp) {
+        for TableRequest { id, rows } in std::mem::take(&mut *self.tables.borrow_mut()) {
+            match rows.and_then(|rows| host_table::insert_table(app, &rows)) {
+                Ok(()) => self.send(&[("type", "wordcraft:table-inserted".into()), ("id", id.as_str().into())]),
+                Err(error) => self.send(&[("type", "wordcraft:table-failed".into()), ("id", id.as_str().into()), ("error", error.as_str().into())]),
+            };
+        }
+    }
+
     fn report_dirty(&self, dirty: bool) {
         if self.reported.get() != Some(dirty) && self.send(&[("type", "wordcraft:dirty".into()), ("dirty", dirty.into())]) {
             self.reported.set(Some(dirty));
@@ -106,17 +133,25 @@ impl Bridge {
     fn listen(&self, inbox: Inbox, ctx: egui::Context) {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
+        let tables = self.tables.clone();
         let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                 return;
             }
             let data = event.data();
-            if string(&data, "type").as_deref() != Some("wordcraft:open") {
-                return;
+            match string(&data, "type").as_deref() {
+                Some("wordcraft:open") => {
+                    let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Document.docx".to_string());
+                    let Some(bytes) = bytes(&data) else { return };
+                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                }
+                Some("wordcraft:insert-table") => {
+                    // Without a usable id there is nobody to answer.
+                    let Some(id) = string(&data, "id").filter(|id| !id.is_empty() && id.len() <= MAX_ID_BYTES) else { return };
+                    tables.borrow_mut().push(TableRequest { id, rows: rows(&data) });
+                }
+                _ => return,
             }
-            let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Document.docx".to_string());
-            let Some(bytes) = bytes(&data) else { return };
-            inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
             ctx.request_repaint();
         });
         if self.window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_ok() {
@@ -141,6 +176,32 @@ fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
 
 fn string(data: &JsValue, key: &str) -> Option<String> {
     js_sys::Reflect::get(data, &JsValue::from_str(key)).ok()?.as_string()
+}
+
+/// `rows` as an array of arrays of strings, no larger than a table may be (checked before the
+/// values are copied out).
+fn rows(data: &JsValue) -> Result<Vec<Vec<String>>, String> {
+    let bad = || "rows must be an array of arrays of strings".to_string();
+    let rows = js_sys::Reflect::get(data, &JsValue::from_str("rows")).map_err(|_| bad())?;
+    if !js_sys::Array::is_array(&rows) {
+        return Err(bad());
+    }
+    let rows = js_sys::Array::from(&rows);
+    if rows.length() as usize > MAX_ROWS {
+        return Err(format!("a table needs 1 to {MAX_ROWS} rows"));
+    }
+    rows.iter()
+        .map(|row| {
+            if !js_sys::Array::is_array(&row) {
+                return Err(bad());
+            }
+            let row = js_sys::Array::from(&row);
+            if row.length() as usize > MAX_COLS {
+                return Err(format!("a row needs 1 to {MAX_COLS} cells"));
+            }
+            row.iter().map(|cell| cell.as_string().ok_or_else(bad)).collect()
+        })
+        .collect()
 }
 
 /// `bytes` as an `ArrayBuffer` or `Uint8Array`.
