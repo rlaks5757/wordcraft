@@ -8547,3 +8547,61 @@ fn insert_table_refuses_malformed_data() {
     }
     assert!(s.doc.body.iter().all(|b| b.as_table().is_none()));
 }
+
+#[test]
+fn insert_table_adds_table_grid_when_the_document_lacks_it() {
+    // Most templates never used Table Grid, so their styles.xml has no such style.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("x"));
+    s.doc.styles.styles.retain(|st| st.id != "TableGrid");
+    assert!(s.doc.styles.find("Table Grid").is_none());
+    run(&mut s, "insert.table", json!({"data": loop_rows()}));
+    let id = s.doc.body.iter().find_map(|b| b.as_table()).and_then(|t| t.props.style.clone());
+    assert_eq!(id.as_deref(), Some("TableGrid"));
+    assert!(s.doc.styles.get("TableGrid").is_some_and(|st| st.table.as_ref().is_some_and(|t| t.borders.is_some())));
+    // The style and the table survive a .docx save and open.
+    let bytes = crate::io::save_bytes("x.docx", &s.doc).unwrap();
+    let d = crate::io::open_bytes("x.docx", &bytes).unwrap();
+    assert_eq!(d.body.iter().find_map(|b| b.as_table()).and_then(|t| t.props.style.clone()).as_deref(), Some("TableGrid"));
+    assert!(d.styles.get("TableGrid").is_some_and(|st| st.table.as_ref().is_some_and(|t| t.borders.is_some())));
+    // One undo takes the table (and the style) away.
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.body.iter().all(|b| b.as_table().is_none()));
+}
+
+#[test]
+fn insert_table_over_a_selection_replaces_it_in_one_undo() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("hello world"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 5}}));
+    run(&mut s, "insert.table", json!({"data": loop_rows()}));
+    assert!(!text(&s).contains("hello"), "the selected text is replaced");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "hello world");
+    assert!(s.doc.body.iter().all(|b| b.as_table().is_none()));
+}
+
+#[test]
+fn insert_table_inside_a_cell_stays_consistent() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"data": [["a", "b"]]}));
+    assert!(s.sel.focus.path.cell().is_some(), "the caret is in the first cell");
+    let r = s.run("insert.table", &json!({"data": loop_rows()}));
+    let tables = |s: &Session| s.doc.body.iter().filter(|b| b.as_table().is_some()).count();
+    // Either a table nested in the cell or a refusal; never a half-made change.
+    match r {
+        Ok(_) => {
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!(table_texts(&s), [["a", "b"].map(String::from).to_vec()]);
+        }
+        Err(_) => assert_eq!(table_texts(&s), [["a", "b"].map(String::from).to_vec()]),
+    }
+    assert_eq!(tables(&s), 1);
+}
+
+#[test]
+fn insert_table_header_row_is_first_and_loop_row_second() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"data": loop_rows()}));
+    let t = table_texts(&s);
+    assert_eq!(t[0], ["Name", "Qty"]);
+    assert!(t[1][0].starts_with("{{loop items}}") && t[1][1].ends_with("{{endloop}}"));
+}

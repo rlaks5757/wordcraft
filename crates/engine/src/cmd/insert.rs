@@ -158,8 +158,18 @@ fn table(s: &mut Session, v: &Value) -> CmdResult {
         let id = s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
         t.props.style = Some(id);
     } else if data.is_some() {
-        // A table with texts from the host has visible borders, like one made by Convert Text to Table in a styled document.
-        t.props.style = s.doc.styles.find("Table Grid").map(|x| x.id.clone());
+        // A table with texts from the host has visible borders. A document that never used Table
+        // Grid (most templates) lacks the style: this edit adds Word's built-in one.
+        let grid = match s.doc.styles.find("Table Grid") {
+            Some(st) => st.id.clone(),
+            None => {
+                let builtin = wordcraft_doc::styles::StyleSheet::builtin();
+                let st = builtin.get("TableGrid").ok_or_else(|| CmdError::Failed("no Table Grid style".into()))?;
+                s.doc.styles.upsert(st.clone());
+                st.id.clone()
+            }
+        };
+        t.props.style = Some(grid);
     }
     for (r, line) in data.iter().flatten().enumerate() {
         for (c, txt) in line.iter().enumerate() {
@@ -185,7 +195,8 @@ fn table(s: &mut Session, v: &Value) -> CmdResult {
 /// widest; its missing cells stay empty.
 fn table_data(v: &Value) -> Result<Option<Vec<Vec<String>>>, CmdError> {
     let Some(d) = v.get("data").filter(|d| !d.is_null()) else { return Ok(None) };
-    let bad = || CmdError::Params("`data` must be rows (1 to 32767) of 1 to 63 strings".into());
+    let (max_rows, max_cols) = (wordcraft_doc::table::MAX_ROWS, wordcraft_doc::table::MAX_COLS);
+    let bad = || CmdError::Params(format!("`data` must be rows (1 to {max_rows}) of 1 to {max_cols} strings"));
     let rows = d.as_array().filter(|r| (1..=wordcraft_doc::table::MAX_ROWS).contains(&r.len())).ok_or_else(bad)?;
     let rows = rows
         .iter()

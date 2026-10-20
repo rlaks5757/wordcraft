@@ -25,11 +25,14 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
-use wordcraft_ui_egui::host_table::{self, MAX_COLS, MAX_ROWS};
+use wordcraft_ui_egui::host_table::{self, MAX_CELL_CHARS, MAX_COLS, MAX_ROWS};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
+
+/// Most table requests waiting for the next frame; more are dropped.
+const MAX_PENDING_TABLES: usize = 16;
 
 /// The longest request id taken from the parent.
 const MAX_ID_BYTES: usize = 200;
@@ -148,7 +151,9 @@ impl Bridge {
                 Some("wordcraft:insert-table") => {
                     // Without a usable id there is nobody to answer.
                     let Some(id) = string(&data, "id").filter(|id| !id.is_empty() && id.len() <= MAX_ID_BYTES) else { return };
-                    tables.borrow_mut().push(TableRequest { id, rows: rows(&data) });
+                    if tables.borrow().len() < MAX_PENDING_TABLES {
+                        tables.borrow_mut().push(TableRequest { id, rows: rows(&data) });
+                    }
                 }
                 _ => return,
             }
@@ -199,7 +204,16 @@ fn rows(data: &JsValue) -> Result<Vec<Vec<String>>, String> {
             if row.length() as usize > MAX_COLS {
                 return Err(format!("a row needs 1 to {MAX_COLS} cells"));
             }
-            row.iter().map(|cell| cell.as_string().ok_or_else(bad)).collect()
+            row.iter()
+                .map(|cell| {
+                    // UTF-16 units are never fewer than characters: a longer string is refused before it is copied.
+                    let units = cell.dyn_ref::<js_sys::JsString>().map(|s| s.length() as usize).ok_or_else(bad)?;
+                    if units > MAX_CELL_CHARS * 2 {
+                        return Err(format!("a cell holds at most {MAX_CELL_CHARS} characters"));
+                    }
+                    cell.as_string().ok_or_else(bad)
+                })
+                .collect()
         })
         .collect()
 }
