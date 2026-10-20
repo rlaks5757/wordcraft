@@ -89,14 +89,57 @@ mod tests {
         assert!(a.session.sel.focus.path.cell().is_some());
         let before = a.session.doc.plain_text(StoryRef::Body);
         let err = insert_table(&mut a, &rows(&[&["Name", "Qty"], &["{{loop items}}{{name}}", "{{qty}}{{endloop}}"]]));
-        assert!(err.is_err(), "a table does not go into a table cell");
+        assert_eq!(err, Err(IN_TABLE.to_string()), "a table does not go into a table cell");
         assert_eq!(a.session.doc.plain_text(StoryRef::Body), before);
         assert_eq!(a.session.doc.body.iter().filter(|b| b.as_table().is_some()).count(), 1);
         // A selection that only ends in a cell is refused too.
         let mut sel = a.session.sel.clone();
         sel.anchor = wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0]), off: 0 };
         a.session.sel = sel;
-        assert!(insert_table(&mut a, &rows(&[&["x", "y"]])).is_err());
+        assert_eq!(insert_table(&mut a, &rows(&[&["x", "y"]])), Err(IN_TABLE.to_string()));
+    }
+
+    /// The body as "T" for a table and "P" for a paragraph.
+    fn shape(a: &WordApp) -> String {
+        a.session.doc.body.iter().map(|b| if b.as_table().is_some() { 'T' } else { 'P' }).collect()
+    }
+
+    /// Put the caret in the body block `block` at `off`.
+    fn caret(a: &mut WordApp, block: u32, off: usize) {
+        a.run("select.range", serde_json::json!({"anchor": {"block": block, "off": off}, "focus": {"block": block, "off": off}})).unwrap();
+    }
+
+    #[test]
+    fn a_new_table_never_touches_the_table_next_to_it() {
+        let loop_rows = rows(&[&["Name", "Qty"], &["{{loop items}}{{name}}", "{{qty}}{{endloop}}"]]);
+        // Table, then a paragraph: the caret at the start of that paragraph.
+        let mut a = app();
+        insert_table(&mut a, &loop_rows).unwrap();
+        let first = shape(&a);
+        assert_eq!(first, "TP");
+        caret(&mut a, 1, 0);
+        a.session.dirty = false;
+        insert_table(&mut a, &loop_rows).unwrap();
+        assert_eq!(shape(&a), "TPTP", "a paragraph keeps the two tables apart");
+        // One undo takes the table and the separating paragraph away.
+        a.run("edit.undo", serde_json::json!({})).unwrap();
+        assert_eq!(shape(&a), first);
+        // Paragraph, then a table: the caret at the end of that paragraph.
+        let mut b = app();
+        insert_table(&mut b, &loop_rows).unwrap();
+        let mut doc = b.session.doc.clone();
+        doc.body.insert(0, wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("lead", Default::default())));
+        let mut c = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        assert_eq!(shape(&c).chars().take(2).collect::<String>(), "PT");
+        caret(&mut c, 0, 4);
+        insert_table(&mut c, &loop_rows).unwrap();
+        assert_eq!(shape(&c).chars().take(4).collect::<String>(), "PTPT", "a paragraph between the new table and the one after it");
+        // Saved and opened again, they are two tables.
+        let bytes = wordcraft_engine::io::save_bytes("x.docx", &c.session.doc).unwrap();
+        let d = wordcraft_engine::io::open_bytes("x.docx", &bytes).unwrap();
+        assert_eq!(d.body.iter().filter(|x| x.as_table().is_some()).count(), 2);
+        let s: String = d.body.iter().map(|x| if x.as_table().is_some() { 'T' } else { 'P' }).collect();
+        assert!(!s.contains("TT"), "{s}");
     }
 
     #[test]

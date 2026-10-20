@@ -184,7 +184,19 @@ fn table(s: &mut Session, v: &Value) -> CmdResult {
         t.props.bidi_visual = true;
     }
     let story = s.sel.focus.story;
-    let path = insert_block_at_caret(s, Block::Table(t))?;
+    let mut path = insert_block_at_caret(s, Block::Table(t))?;
+    if data.is_some() {
+        // Two tables with no paragraph between them read as one. Keep a paragraph on each side
+        // that has a table (same edit, so one undo takes them all).
+        let is_table = |s: &Session, p: &Path| s.doc.block(story, p).is_some_and(|b| b.as_table().is_some());
+        if is_table(s, &path.with_last(path.last() + 1)) {
+            s.doc.insert_block(story, &path.with_last(path.last() + 1), Block::Para(Paragraph::new()))?;
+        }
+        if path.last() > 0 && is_table(s, &path.with_last(path.last() - 1)) {
+            s.doc.insert_block(story, &path, Block::Para(Paragraph::new()))?;
+            path = path.with_last(path.last() + 1);
+        }
+    }
     let mut first = path.0.clone();
     first.extend([0, 0, 0]);
     s.sel = Selection::caret(Pos { story, path: Path(first), off: 0 });
