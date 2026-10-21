@@ -12,12 +12,15 @@ pub const KEY: &str = "wordcraft.ui";
 const MAX_STORED: usize = 4 << 20;
 
 /// Apply preferences stored on an earlier visit. Missing, oversized or unreadable values leave
-/// the defaults.
-pub fn restore(app: &mut WordApp, stored: Option<&str>) {
+/// the defaults. `host`: PPM's page owns the files, so no recent file names are taken back.
+pub fn restore(app: &mut WordApp, stored: Option<&str>, host: bool) {
     if let Some(s) = stored.filter(|s| s.len() <= MAX_STORED)
         && let Some(ui) = UiState::from_json(s.as_bytes())
     {
         app.apply_prefs(ui);
+    }
+    if host {
+        app.ui.recent.clear();
     }
 }
 
@@ -25,17 +28,29 @@ pub fn restore(app: &mut WordApp, stored: Option<&str>) {
 #[derive(Default)]
 pub struct PrefsSync {
     last: Option<String>,
+    /// Host mode: file names never reach the store, and names stored earlier are written over.
+    host: bool,
 }
 
 impl PrefsSync {
     /// Starts from what is already stored, so restoring doesn't write it straight back.
     pub fn new(stored: Option<String>) -> Self {
-        Self { last: stored }
+        Self { last: stored, host: false }
+    }
+
+    /// Keep recent file names out of the store ([`restore`]'s `host`).
+    pub fn host(mut self, host: bool) -> Self {
+        self.host = host;
+        self
     }
 
     /// The JSON to store when the app's preferences differ from what was last written.
     pub fn changed(&mut self, app: &WordApp) -> Option<String> {
-        let json = match serde_json::to_string(&app.prefs()) {
+        let mut prefs = app.prefs();
+        if self.host {
+            prefs.recent.clear();
+        }
+        let json = match serde_json::to_string(&prefs) {
             Ok(j) => j,
             Err(e) => {
                 log::warn!("preferences: cannot serialize: {e}");
@@ -72,7 +87,7 @@ mod tests {
         let stored = sync.changed(&first).expect("the theme change is stored");
 
         let mut reloaded = app();
-        restore(&mut reloaded, Some(&stored));
+        restore(&mut reloaded, Some(&stored), false);
         assert_eq!(reloaded.ui.theme, wordcraft_ui_egui::theme::Appearance::Dark);
         assert_eq!(PrefsSync::new(Some(stored)).changed(&reloaded), None, "restoring doesn't write back");
     }
@@ -81,8 +96,28 @@ mod tests {
     fn junk_storage_keeps_defaults() {
         for junk in [None, Some(""), Some("not json"), Some("[1,2]"), Some("{\"theme\":42}")] {
             let mut a = app();
-            restore(&mut a, junk);
+            restore(&mut a, junk, false);
             assert_eq!(a.ui.theme, wordcraft_ui_egui::theme::Appearance::System, "junk keeps the default appearance");
         }
+    }
+
+    /// PPM's host mode: recent file names are neither restored from nor written to the store, and
+    /// a store that already holds some is written over at the first pass.
+    #[test]
+    fn host_mode_keeps_recent_file_names_out_of_the_store() {
+        let mut desktop = app();
+        desktop.ui.recent = vec!["/home/me/secret plan.docx".into()];
+        let with_names = serde_json::to_string(&desktop.prefs()).unwrap();
+        assert!(with_names.contains("secret plan"), "the fixture stores a name");
+
+        let mut host = app();
+        restore(&mut host, Some(&with_names), true);
+        assert!(host.ui.recent.is_empty(), "nothing is restored");
+        let mut sync = PrefsSync::new(Some(with_names)).host(true);
+        let rewritten = sync.changed(&host).expect("the store held names, so it is written over");
+        assert!(!rewritten.contains("secret plan"));
+        // A name that shows up later is not written either.
+        host.ui.recent = vec!["/x/late.docx".into()];
+        assert_eq!(sync.changed(&host), None);
     }
 }

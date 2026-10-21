@@ -35,6 +35,16 @@ pub fn start() {
         // `?host=parent`: a same-origin page framing WordCraft opens documents in it and stores
         // what it saves (`host`).
         let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        // The PPM build runs only inside PPM: without the parent page it opens nothing.
+        let host = match crate::launch::decide(crate::launch::HOST_BUILD, bridge.is_some()) {
+            crate::launch::Launch::NeedHost => {
+                if let Some(el) = document.get_element_by_id(LOADING_ID) {
+                    el.set_text_content(Some(crate::launch::NEED_HOST_MESSAGE));
+                }
+                return;
+            }
+            crate::launch::Launch::Start { host } => host,
+        };
         let app_bridge = bridge.clone();
         let mut options = eframe::WebOptions::default();
         if query().contains("webgl")
@@ -50,22 +60,30 @@ pub fn start() {
                     if let Some(rs) = &cc.wgpu_render_state {
                         log::info!("wordcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
-                    // Fonts the user added on an earlier visit (#582); the app notices them arrive.
-                    font_store::load_all(cc.egui_ctx.clone());
+                    // Fonts the user added on an earlier visit (#582); the app notices them arrive. In host
+                    // mode nothing comes from the user's machine: no stored fonts, no pasted pictures.
+                    if !host {
+                        font_store::load_all(cc.egui_ctx.clone());
+                    }
                     let inbox: Inbox = Inbox::default();
                     let pasted: Inbox = Inbox::default();
-                    if let Err(e) = listen_for_pasted_pictures(pasted.clone(), cc.egui_ctx.clone()) {
+                    if !host && let Err(e) = listen_for_pasted_pictures(pasted.clone(), cc.egui_ctx.clone()) {
                         log::error!("pasting pictures is unavailable: {e}");
                     }
                     // The browser's locale picks the new document's paper, the units and the
                     // decimal separator (#838).
                     let region = wordcraft_ui_egui::i18n::system_region();
-                    let sample = query().contains("sample");
+                    // `?sample` is a way to open a document: not in host mode.
+                    let sample = query().contains("sample") && !host;
                     let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
                     let mut session = Session::new(doc);
                     session.system_region = region;
                     let messages = Rc::new(RefCell::new(Vec::new()));
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone());
+                    if host {
+                        lock_services(&mut services);
+                        session.lock_to_host();
+                    }
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, cc.egui_ctx.clone());
                     }
@@ -75,14 +93,14 @@ pub fn start() {
                     app.autosave = false;
                     // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
                     let stored = stored_prefs();
-                    crate::prefs::restore(&mut app, stored.as_deref());
+                    crate::prefs::restore(&mut app, stored.as_deref(), host);
                     // A region chosen in File › Options replaces the browser's for the first blank
                     // document too (#838).
                     if !sample && app.session.prefs.region.is_some() {
                         let doc = app.session.blank_document();
                         app.session.set_document(doc);
                     }
-                    let prefs = crate::prefs::PrefsSync::new(stored);
+                    let prefs = crate::prefs::PrefsSync::new(stored).host(host);
                     // No document to show: start on File › Home, as the desktop app does (#766).
                     // In host mode the parent sends the document to edit: a blank one meanwhile.
                     if !sample && app_bridge.is_none() {
@@ -94,7 +112,7 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs, bridge: app_bridge }))
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, bridge: app_bridge, host }))
                 }),
             )
             .await;
@@ -126,6 +144,8 @@ struct WebShell {
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
     bridge: Option<crate::host::Bridge>,
+    /// Locked to the parent page: files dropped on the window and links are refused.
+    host: bool,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -140,7 +160,8 @@ fn stored_prefs() -> Option<String> {
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
-        for f in dropped {
+        // Host mode: the parent hands over the documents; a file dropped on the window is not read.
+        for f in dropped.into_iter().filter(|_| !self.host) {
             let inbox = self.inbox.clone();
             let ctx = ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -181,6 +202,9 @@ impl eframe::App for WebShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
+        if self.host {
+            strip_open_url(ui.ctx());
+        }
     }
 }
 
@@ -284,6 +308,27 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
         })),
         ..Default::default()
     }
+}
+
+/// Host mode: nothing leaves through the browser's own file and print paths. The pickers, the
+/// print dialog and the font store stay unset, so the app has no way to ask for them
+/// ([`WordApp`] refuses those requests itself as well).
+fn lock_services(services: &mut Services) {
+    services.open_async = None;
+    services.pick_open = None;
+    services.pick_save = None;
+    services.file_dialog = None;
+    services.print = None;
+    services.inbox = None;
+    services.store_font = None;
+    services.forget_font = None;
+    services.load_system_fonts = None;
+}
+
+/// Host mode: links open nothing. Document links and the About box's links both end as an
+/// `OpenUrl` output command, so this one place drops them all.
+fn strip_open_url(ctx: &egui::Context) {
+    ctx.output_mut(|o| o.commands.retain(|c| !matches!(c, egui::OutputCommand::OpenUrl(_))));
 }
 
 /// Most files one multi-select pick (Add Font) reads.

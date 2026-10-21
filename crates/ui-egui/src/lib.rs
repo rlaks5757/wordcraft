@@ -57,6 +57,7 @@ pub mod file_dialogs;
 pub mod frame;
 pub mod guides;
 pub mod host_table;
+pub mod host_lock;
 pub mod i18n;
 pub mod icons;
 pub mod ink;
@@ -838,6 +839,20 @@ impl WordApp {
         }
     }
 
+    /// Whether this app is locked to the PPM host page ([`wordcraft_engine::Session::lock_to_host`]).
+    pub fn host_locked(&self) -> bool {
+        self.session.is_host_locked()
+    }
+
+    /// `Err` when the host lock refuses command `id` (engine commands by the engine's allowlist,
+    /// `ui.*` by [`host_lock`]). Silent: no status message, the control is just absent.
+    fn host_refusal(&self, id: &str, params: &Value) -> Result<(), String> {
+        if !self.session.is_host_locked() {
+            return Ok(());
+        }
+        if id.starts_with("ui.") { host_lock::check_ui(id, params) } else { self.session.host_check(id, params) }
+    }
+
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
     pub(crate) fn run_keep_view(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.canvas.keep_view = true;
@@ -850,6 +865,8 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // The PPM host lock comes first: a refused command opens no dialog and asks nothing.
+        self.host_refusal(id, &params)?;
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -921,6 +938,7 @@ impl WordApp {
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.host_refusal(id, &params)?;
         // A pending Change Picture only survives until the next action (#147).
         if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
             self.change_picture_target = None;
@@ -1113,7 +1131,10 @@ impl WordApp {
             }
         }
         let go = match choice {
-            SaveChoice::Cancel => false,
+            SaveChoice::Cancel => {
+                self.session.disarm_host_open();
+                false
+            }
             SaveChoice::DontSave => true,
             // A new document or an import-only Word file: ask where through Save As. The command
             // runs once that has saved, on a later frame with the non-blocking dialog (#94).
@@ -1363,7 +1384,9 @@ impl WordApp {
         for req in std::mem::take(&mut self.session.ui_requests) {
             self.handle_request(&req);
         }
-        if let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
+        // Host mode: the parent's file names are not the user's to list.
+        if !self.session.is_host_locked()
+            && let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
             && self.ui.recent.first() != Some(&p)
         {
             self.ui.recent.retain(|r| *r != p);
@@ -2244,7 +2267,9 @@ impl WordApp {
         crate::keytips::show(self, &ctx, ui);
         keys::global_shortcuts(self, &ctx);
         self.refocus_after_chrome_click(&ctx);
-        if let Some(url) = self.canvas.open_url.take() {
+        if let Some(url) = self.canvas.open_url.take()
+            && !self.session.is_host_locked()
+        {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         let title = if self.has_document() {
@@ -2331,6 +2356,10 @@ impl WordApp {
     fn drain_inbox(&mut self) {
         let Some(inbox) = self.services.inbox.clone() else { return };
         let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
+        // Host mode: only the parent's documents ([`Self::drain_host_inbox`]) come in.
+        if self.session.is_host_locked() {
+            return;
+        }
         let mut placed_picture = false;
         for (name, bytes) in files {
             let lower = name.to_ascii_lowercase();
@@ -2367,7 +2396,13 @@ impl WordApp {
         let Some(inbox) = self.services.host_inbox.clone() else { return };
         let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
         for (name, bytes) in files {
+            // The user's own Open is blocked in host mode; the parent's document is the one open
+            // that passes the lock (it stays armed while a Save Changes prompt waits).
+            self.session.arm_host_open(&name);
             let r = self.run("file.open", json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}));
+            if !r.as_ref().is_ok_and(|v| v.get("pending").is_some()) {
+                self.session.disarm_host_open();
+            }
             if r.is_ok() {
                 self.ui.backstage = false;
             }
@@ -2379,6 +2414,10 @@ impl WordApp {
     fn drain_pasted(&mut self) {
         let Some(pasted) = self.services.pasted.clone() else { return };
         let pictures = std::mem::take(&mut *pasted.lock().unwrap_or_else(|e| e.into_inner()));
+        // Host mode: nothing comes in from the user's machine, a pasted picture included.
+        if self.session.is_host_locked() {
+            return;
+        }
         let target = paste_target(self.canvas.focused, self.ui.backstage, self.dialog.is_some() || self.file_dialog_open());
         for (_, bytes) in pictures {
             if !target {
@@ -7282,6 +7321,94 @@ mod tests {
         a.drain_host_inbox();
         assert_eq!(user.lock().unwrap().len(), 1, "the parent's drain leaves the user's inbox alone");
         assert!(!a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("user file"));
+    }
+
+    fn locked_app() -> WordApp {
+        let mut a = app();
+        a.session.lock_to_host();
+        a
+    }
+
+    fn body(a: &WordApp) -> String {
+        a.session.doc.plain_text(wordcraft_doc::StoryRef::Body)
+    }
+
+    /// Host mode: the parent's document opens, and the user's own files, pasted pictures and
+    /// file commands do nothing.
+    #[test]
+    fn host_lock_lets_the_parent_open_and_refuses_the_users_files() {
+        let mut a = locked_app();
+        let (host, user) = (Inbox::default(), Inbox::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.inbox = Some(user.clone());
+        host.lock().unwrap().push(("doc.txt".into(), b"from the parent".to_vec()));
+        a.drain_host_inbox();
+        assert!(body(&a).contains("from the parent"), "the parent's document opens under the lock");
+        // The grant is gone after that one open: a script's file.open is refused.
+        assert!(a.run("file.open", json!({"path": "doc.txt", "data": "AAAA"})).is_err());
+        // A dropped or picked file is not read.
+        user.lock().unwrap().push(("mine.png".into(), png_bytes([200, 30, 30, 255])));
+        a.drain_inbox();
+        assert_eq!(object_count(&mut a), 0, "a user file is not inserted");
+        let pasted: Inbox = Inbox::default();
+        pasted.lock().unwrap().push(("p.png".into(), png_bytes([200, 30, 30, 255])));
+        a.services.pasted = Some(pasted);
+        a.canvas.focused = true;
+        a.drain_pasted();
+        assert_eq!(object_count(&mut a), 0, "a pasted picture is not inserted");
+    }
+
+    /// A parent document that arrives while changes are unsaved waits for the Save Changes
+    /// answer; Don't Save opens it, Cancel leaves the old one and drops the grant.
+    #[test]
+    fn host_lock_open_waits_for_save_changes_and_cancel_drops_the_grant() {
+        let mut a = locked_app();
+        a.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        let host = Inbox::default();
+        a.services.host_inbox = Some(host.clone());
+        host.lock().unwrap().push(("one.txt".into(), b"first".to_vec()));
+        a.drain_host_inbox();
+        assert!(a.dialog.is_some(), "the Save Changes prompt is open");
+        a.answer_save_changes(SaveChoice::Cancel).unwrap();
+        assert!(body(&a).contains("unsaved"));
+        assert!(a.run("file.open", json!({"path": "one.txt", "data": "AAAA"})).is_err(), "Cancel dropped the grant");
+        host.lock().unwrap().push(("two.txt".into(), b"second".to_vec()));
+        a.drain_host_inbox();
+        a.answer_save_changes(SaveChoice::DontSave).unwrap();
+        assert!(body(&a).contains("second"));
+    }
+
+    /// Host mode: each platform function that reaches the user's machine is closed.
+    #[test]
+    fn host_lock_closes_file_dialogs_pickers_and_menu_entries() {
+        let mut a = locked_app();
+        for id in ["file.new", "file.open", "file.saveAs", "file.exportPdf", "file.print", "insert.picture", "tools.attachTemplate", "tools.macros"] {
+            assert!(a.run(id, json!({})).is_err(), "{id} is refused");
+            assert!(a.execute(id, json!({})).is_err(), "{id} is refused by execute");
+        }
+        for id in ["ui.openFileDialog", "ui.print", "ui.discord", "ui.fileBrowser", "ui.startScreen"] {
+            assert!(a.run(id, json!({})).is_err(), "{id} is refused");
+        }
+        assert!(a.run("ui.dialog", json!({"name": "templates"})).is_err());
+        assert!(a.run("ui.backstage", json!({"value": true, "page": "open"})).is_err());
+        assert!(a.run("ui.backstage", json!({"value": true, "page": "info"})).is_ok());
+        assert!(matches!(
+            a.ask_file(file_dialogs::FileDialogRequest::Open { purpose: "document".into() }, file_dialogs::AfterPick::OpenDocument),
+            file_dialogs::Asked::Done(Err(_))
+        ));
+        assert!(dialogs::Dialog::open("templates", &mut a).is_none());
+        a.open_dialog();
+        a.pick_picture();
+        a.pick_font();
+        a.load_system_fonts();
+        assert!(!a.file_dialog_open());
+        // Editing and the plain save still work.
+        assert!(a.run("text.insert", json!({"text": "hi"})).is_ok());
+        assert!(!widgets::enabled(&a, "file.saveAs"));
+        // Without the lock the same ids are not refused by it.
+        let mut free = app();
+        assert!(free.host_refusal("file.saveAs", &Value::Null).is_ok());
+        assert!(free.run("ui.backstage", json!({"value": true, "page": "open"})).is_ok());
     }
 
     /// With a Drawing Canvas selected, every image of the drop goes into it (#1592).

@@ -173,6 +173,10 @@ fn keytip_badge(ui: &Ui, rect: Rect, id: &str, name: &str) {
 
 /// Whether a command exists and is enabled.
 pub fn enabled(app: &WordApp, id: &str) -> bool {
+    // Host mode: what the PPM host lock refuses is never available.
+    if app.host_refusal(id, &Value::Null).is_err() {
+        return false;
+    }
     // No document open (#1129): only what opens one, Help and the settings.
     if !app.has_document() && !crate::works_without_document(id) {
         return false;
@@ -243,6 +247,10 @@ pub fn label_line(ui: &Ui, cx: f32, y: f32, text: &str, font: egui::FontId, colo
 
 #[allow(clippy::too_many_arguments)]
 fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool, checked: bool) -> Response {
+    // Host mode: a button for a refused command is not drawn.
+    if app.host_refusal(id, &params).is_err() {
+        return ui.allocate_response(vec2(0.0, 0.0), Sense::hover());
+    }
     let label = tl!(label);
     let t = Tokens::get(ui.ctx());
     let galley_w =
@@ -271,6 +279,9 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
 
 /// A small button: 16 px icon with an optional label; `checked` draws the toggled state.
 pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, id: &str, params: Value, checked: bool) -> Response {
+    if app.host_refusal(id, &params).is_err() {
+        return ui.allocate_response(vec2(0.0, 0.0), Sense::hover());
+    }
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     // A compact group (#662) shows only the icon; the tooltip keeps the name.
     let label = label.filter(|_| !crate::ribbon_fit::compact(ui.ctx()));

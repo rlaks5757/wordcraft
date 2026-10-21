@@ -110,11 +110,16 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Options")).font(semibold(26.0)));
     ui.add_space(16.0);
-    let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
+    // Host mode: the panes that switch file features back on don't show.
+    let hidden = |app: &WordApp, id: &str| app.host_locked() && crate::host_lock::HIDDEN_OPTIONS_PANES.contains(&id);
+    let current = if PANES.contains(&app.ui.options_pane.as_str()) && !hidden(app, &app.ui.options_pane) { app.ui.options_pane.clone() } else { "general".to_string() };
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width(170.0);
             for id in PANES {
+                if hidden(app, id) {
+                    continue;
+                }
                 let label = tl!(pane_label(id));
                 let active = current == id;
                 let (r, resp) = ui.allocate_exact_size(vec2(170.0, 30.0), egui::Sense::click());
@@ -470,12 +475,14 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(8.0);
     section(ui, "Display");
     egui::Grid::new("options_display").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Recent documents to show:"));
-        let mut n = app.ui.recent_shown();
-        if ui.add(egui::DragValue::new(&mut n).range(0..=crate::MAX_RECENT).speed(0.2)).changed() {
-            app.ui.recent_count = n;
+        if !app.host_locked() {
+            ui.label(tl!("Recent documents to show:"));
+            let mut n = app.ui.recent_shown();
+            if ui.add(egui::DragValue::new(&mut n).range(0..=crate::MAX_RECENT).speed(0.2)).changed() {
+                app.ui.recent_count = n;
+            }
+            ui.end_row();
         }
-        ui.end_row();
         ui.label(tl!("Measurement units:"));
         // The user's choice, else the region's (#838): Automatic follows the region.
         let units = app.session.units();
@@ -528,6 +535,9 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
         .changed()
     {
         let _ = app.run("ui.caretAnimation", json!({"value": caret}));
+    }
+    if app.host_locked() {
+        return;
     }
     ui.add_space(8.0);
     section(ui, "Customize");

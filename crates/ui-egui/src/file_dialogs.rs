@@ -130,6 +130,10 @@ impl WordApp {
     /// Ask the host for a file and do `after` with the answer: now for a blocking dialog, on a
     /// later frame for an asynchronous one. Ignored while another dialog is open.
     pub(crate) fn ask_file(&mut self, req: FileDialogRequest, after: AfterPick) -> Asked {
+        // Host mode: the parent page owns the files; no picker, native dialog or file browser opens.
+        if self.host_locked() {
+            return Asked::Done(Err("file dialogs are not available in PPM".into()));
+        }
         if self.file_dialog_open() {
             log::debug!("file dialog already open; ignoring {req:?}");
             self.status(tl!("A file dialog is already open."));
@@ -373,6 +377,9 @@ impl WordApp {
     }
 
     pub(crate) fn open_dialog(&mut self) {
+        if self.host_locked() {
+            return;
+        }
         if let Some(f) = &self.services.open_async {
             f("document");
             return;
@@ -381,6 +388,9 @@ impl WordApp {
     }
 
     pub(crate) fn pick_picture(&mut self) {
+        if self.host_locked() {
+            return;
+        }
         if let Some(f) = &self.services.open_async {
             f("picture");
             return;
@@ -390,6 +400,9 @@ impl WordApp {
 
     /// Pick a font file to add (Add Font…; web: it arrives through the inbox).
     pub(crate) fn pick_font(&mut self) {
+        if self.host_locked() {
+            return;
+        }
         if let Some(f) = &self.services.open_async {
             f("font");
             return;
@@ -399,6 +412,9 @@ impl WordApp {
 
     /// Request loading local system installed fonts (web: queryLocalFonts).
     pub(crate) fn load_system_fonts(&mut self) {
+        if self.host_locked() {
+            return;
+        }
         if let Some(f) = &self.services.load_system_fonts {
             f();
         } else {

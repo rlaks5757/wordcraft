@@ -404,6 +404,10 @@ pub struct Session {
     typing_open: bool,
     /// The next mutating command joins the previous undo step (later frames of a drag).
     join_next: bool,
+    /// Locked to the PPM host: only [`crate::host_policy`]'s commands run. Never cleared.
+    pub(crate) host_lock: bool,
+    /// The parent's document name an open may pass the lock for ([`Session::arm_host_open`]).
+    pub(crate) host_open: Option<String>,
     /// The newest automatic capitalisation, for Word's "Automatically add words to list" (#1857).
     pub(crate) autocap: Option<crate::cmd::tools::AutoCap>,
     rev: u64,
@@ -656,6 +660,8 @@ impl Session {
             redo: Vec::new(),
             typing_open: false,
             join_next: false,
+            host_lock: false,
+            host_open: None,
             autocap: None,
             rev: 1,
             document_id: 1,
@@ -1217,6 +1223,9 @@ impl Session {
             // Go Back's places, like the caret history: not part of the document.
             edit_marks: _,
             go_back_step: _,
+            // The PPM host lock: set once at start-up, not an edit.
+            host_lock: _,
+            host_open: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
@@ -1283,6 +1292,8 @@ impl Session {
         let join = std::mem::take(&mut self.join_next);
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
+        // The PPM host lock: commands outside its allowlist never start, whoever asked.
+        self.host_gate(id, params)?;
         if let Some(why) = (spec.enabled)(self) {
             return Err(CmdError::Disabled(format!("{id}: {why}")));
         }
