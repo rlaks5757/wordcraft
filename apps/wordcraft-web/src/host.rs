@@ -73,8 +73,11 @@ impl Bridge {
     /// Send saved and exported files to the parent instead of downloading them, report the dirty
     /// flag to it, and hear files from it. A file handed over counts as a finished save: the app
     /// marks the document saved when `download` returns `Ok` and no picker ticket was started.
-    pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
-        self.listen(inbox, ctx);
+    pub fn connect(&self, services: &mut Services, ctx: egui::Context) {
+        // The parent's documents wait apart from the user's own files (picker, drops).
+        let host_inbox = Inbox::default();
+        services.host_inbox = Some(host_inbox.clone());
+        self.listen(host_inbox, ctx);
         let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes)));
         // The app tells the dirty flag after each pass; the parent hears it when it changes.

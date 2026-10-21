@@ -115,6 +115,11 @@ pub struct Services {
     pub open_async: Option<Box<dyn Fn(&str)>>,
     /// Web: files (name, bytes) delivered asynchronously (picker, drag and drop).
     pub inbox: Option<Inbox>,
+    /// Web, host mode: documents the parent page sends (name, bytes). Kept apart from `inbox`
+    /// (the user's own picker and drops), which routes by file extension: a file from the parent
+    /// is always a document to open, whatever its name, and a file the user picks is never one the
+    /// parent sent.
+    pub host_inbox: Option<Inbox>,
     /// Web: pictures pasted from the browser's clipboard (the bytes; the name is ignored). Kept
     /// apart from `inbox` because a paste only lands in the document when the page is the edit
     /// target (#1349), where a dropped or opened file always lands.
@@ -2011,6 +2016,7 @@ impl WordApp {
         self.clear_stale_change_picture();
         let _ = self.poll_file_dialog();
         self.drain_inbox();
+        self.drain_host_inbox();
         self.drain_pasted();
         self.watch_fonts(ctx);
         let document = self.session.document_id();
@@ -2348,6 +2354,20 @@ impl WordApp {
             } else {
                 self.run("file.open", json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
             };
+            if r.is_ok() {
+                self.ui.backstage = false;
+            }
+        }
+    }
+
+    /// Documents the parent page sent: each opens as a document, like File › Open (a dirty
+    /// document asks Save / Don't Save / Cancel first). The name's extension only picks the file
+    /// format, never another kind of import.
+    fn drain_host_inbox(&mut self) {
+        let Some(inbox) = self.services.host_inbox.clone() else { return };
+        let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
+        for (name, bytes) in files {
+            let r = self.run("file.open", json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}));
             if r.is_ok() {
                 self.ui.backstage = false;
             }
@@ -7235,6 +7255,33 @@ mod tests {
         }
         a.drain_inbox();
         assert_eq!(object_count(&mut a), 2);
+    }
+
+    /// The parent's files and the user's own files use separate inboxes: a parent file is always a
+    /// document to open (whatever its extension), and a user file never takes the parent's path.
+    #[test]
+    fn host_and_user_inboxes_are_separate() {
+        let mut a = app();
+        let (host, user): (Inbox, Inbox) = (Inbox::default(), Inbox::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.inbox = Some(user.clone());
+        // A parent file named like a picture is not inserted as one: it is read as a document
+        // (these bytes are not one, so the open fails and the document is unchanged).
+        host.lock().unwrap().push(("fake.png".into(), png_bytes([200, 30, 30, 255])));
+        a.drain_inbox();
+        assert_eq!(host.lock().unwrap().len(), 1, "the user's drain leaves the parent's inbox alone");
+        a.drain_host_inbox();
+        assert!(host.lock().unwrap().is_empty());
+        assert_eq!(object_count(&mut a), 0, "a parent file is never inserted as a picture");
+        // A parent .txt opens as a document.
+        host.lock().unwrap().push(("from-parent.txt".into(), b"from the parent".to_vec()));
+        a.drain_host_inbox();
+        assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("from the parent"));
+        // A user file is not opened by the parent's drain.
+        user.lock().unwrap().push(("mine.txt".into(), b"user file".to_vec()));
+        a.drain_host_inbox();
+        assert_eq!(user.lock().unwrap().len(), 1, "the parent's drain leaves the user's inbox alone");
+        assert!(!a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("user file"));
     }
 
     /// With a Drawing Canvas selected, every image of the drop goes into it (#1592).
