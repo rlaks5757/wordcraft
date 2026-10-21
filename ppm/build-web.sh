@@ -9,7 +9,12 @@ export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-1.99.1}"
 app=wordcraft-web
 cd "$root/apps/$app"
 # ppm-host: PPM 전용 빌드는 항상 호스트 모드(부모 PPM 창 없이는 문서를 열지 않음). 컴파일 시점 값.
-trunk build --release --features ppm-host
+# 인자 없음: release(LTO). --fast: 확인용 빠른 빌드(web-fast, 최적화는 낮음).
+case "${1:-}" in
+  "") trunk build --release --features ppm-host ;;
+  --fast) trunk build --cargo-profile web-fast --features ppm-host ;;
+  *) echo "usage: $0 [--fast]" >&2; exit 2 ;;
+esac
 # OFL-1.1 §2: the license travels with the embedded font.
 mkdir -p "$root/dist/web/licenses"
 cp "$root/ppm/fonts-ko/fonts/nanum-gothic/OFL.txt" "$root/dist/web/licenses/NanumGothic-OFL.txt"
