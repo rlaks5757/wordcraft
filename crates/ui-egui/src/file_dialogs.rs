@@ -167,7 +167,8 @@ impl WordApp {
             AfterPick::Export { .. } => policy.command_on("file.exportPdf") || policy.command_on("file.exportPng"),
             AfterPick::PrintPdf { .. } => policy.command_on("file.printPdf"),
             // Templates and the Organizer (ForDialog) bring in macros and styles from files.
-            AfterPick::OpenDocument | AfterPick::Font | AfterPick::ForDialog => false,
+            AfterPick::Font => true,
+            AfterPick::OpenDocument | AfterPick::ForDialog => false,
         }
     }
 
@@ -414,9 +415,6 @@ impl WordApp {
 
     /// Pick a font file to add (Add Font…; web: it arrives through the inbox).
     pub(crate) fn pick_font(&mut self) {
-        if self.host_locked() {
-            return;
-        }
         if let Some(f) = &self.services.open_async {
             f("font");
             return;

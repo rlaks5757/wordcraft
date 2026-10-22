@@ -45,7 +45,7 @@ const ALLOWED: &[&str] = &[
     "equation.insertSymbol", "equation.justify", "equation.move", "equation.normalText", "equation.number", "equation.set", "equation.structure",
     "equation.structureActions", "equation.type", "fields.lock", "fields.next", "fields.previous", "fields.selected", "fields.setCode",
     "fields.toggleCode", "fields.unlink", "fields.unlock", "file.accessibility", "file.compatibility", "file.info", "file.inspect", "file.options",
-    "file.privacy", "file.privacyOptions", "file.properties", "file.protect", "file.save", "file.setAuthor", "font.list", "font.loadSystem",
+    "file.privacy", "file.privacyOptions", "file.properties", "file.protect", "file.save", "file.setAuthor", "font.add", "font.list", "font.loadSystem", "font.remove",
     "format.allCaps", "format.bold", "format.border", "format.changeCase", "format.charStyle", "format.clear", "format.color",
     "format.doubleStrikethrough", "format.doubleUnderline", "format.emboss", "format.enclose", "format.engrave", "format.font", "format.fontDialog",
     "format.growFont", "format.growFont1", "format.hidden", "format.highlight", "format.italic", "format.outline", "format.phonetic",
@@ -118,7 +118,7 @@ const ALLOWED: &[&str] = &[
 #[rustfmt::skip]
 const LOCKED: &[&str] = &[
     "file.autosave", "file.close", "file.encrypt", "file.new", "file.newFromTemplate", "file.open", "file.recover", "file.rename", "file.share",
-    "file.versions", "font.add", "font.remove", "tools.attachTemplate", "tools.detachTemplate", "tools.linkStyles", "tools.macros",
+    "file.versions", "tools.attachTemplate", "tools.detachTemplate", "tools.linkStyles", "tools.macros",
     "tools.recordMacro", "tools.templates", "tools.updateStyles", "view.newWindow",
 ];
 
@@ -323,7 +323,7 @@ mod tests {
         for id in [
             "file.new", "file.open", "file.saveAs", "file.exportPdf", "file.exportPng", "file.print", "file.printPdf", "file.newFromTemplate", "file.saveTemplate",
             "file.recover", "file.autosave", "file.close", "file.encrypt", "file.share", "file.rename", "file.versions", "tools.attachTemplate", "tools.macros",
-            "tools.recordMacro", "tools.templates", "font.add", "view.newWindow",
+            "tools.recordMacro", "tools.templates", "view.newWindow",
         ] {
             let before = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
             let r = s.run(id, &json!({"path": "/tmp/x.docx", "data": "AAAA", "text": "x"}));
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn edits_into_the_document_are_allowed() {
         for id in [
-            "insert.picture", "insert.textFromFile", "insert.object", "insert.spreadsheet", "picture.change", "font.loadSystem", "file.protect", "review.compare",
+            "insert.picture", "insert.textFromFile", "insert.object", "insert.spreadsheet", "picture.change", "font.loadSystem", "font.add", "font.remove", "file.protect", "review.compare",
             "review.combine", "tools.customizeKeyboard", "tools.customizeRibbon", "developer.picture", "mailings.start", "mailings.finish", "mailings.recipients",
         ] {
             assert!(check(id, &json!({}), &HostPolicy::default()).is_ok(), "{id}");

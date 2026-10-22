@@ -7445,7 +7445,6 @@ mod tests {
         assert!(dialogs::Dialog::open("templates", &mut a).is_none());
         assert!(!a.links_allowed(), "links are off without the policy");
         a.open_dialog();
-        a.pick_font();
         assert!(!a.file_dialog_open());
         // A file to put into the document may be asked for; a document to open or a file to save
         // to may not (until the policy says so).
