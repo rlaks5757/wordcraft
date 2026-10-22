@@ -16,15 +16,16 @@ use wordcraft_engine::host_policy::{Grade, HostPolicy};
 #[rustfmt::skip]
 const ALLOWED_UI: &[&str] = &[
     "ui.alignmentGuides", "ui.animations", "ui.backstage", "ui.caretAnimation", "ui.changePicture", "ui.click", "ui.clickText", "ui.closeDialog", "ui.collapseRibbon", "ui.contextMenu",
-    "ui.crop", "ui.dark", "ui.dialog", "ui.drag", "ui.focus", "ui.inspect", "ui.interfaceSize", "ui.key", "ui.keytips", "ui.language", "ui.linkTextBox", "ui.move",
+    "ui.crop", "ui.dark", "ui.dialog", "ui.drag", "ui.focus", "ui.inspect", "ui.interfaceSize", "ui.key", "ui.keytips", "ui.linkTextBox", "ui.move",
     "ui.openRecipientList", "ui.parity", "ui.press", "ui.quickAccessToolbar", "ui.release", "ui.render", "ui.resize", "ui.saveChanges", "ui.screenshot", "ui.tab", "ui.text", "ui.theme",
     "ui.unlistedCommand", "ui.wheel",
 ];
 
-/// Interface commands no policy turns on: they open documents, recover files, or reach outside.
+/// Interface commands no policy turns on: they open documents, recover files, or reach outside
+/// (`ui.language`: the PPM interface is always Korean).
 #[rustfmt::skip]
 const LOCKED_UI: &[&str] = &[
-    "ui.fileBrowser", "ui.makeDefaultApp", "ui.openFileDialog", "ui.recoveryDiscard", "ui.startScreen",
+    "ui.fileBrowser", "ui.language", "ui.makeDefaultApp", "ui.openFileDialog", "ui.recoveryDiscard", "ui.startScreen",
 ];
 
 /// Interface commands that are off until the policy turns them on: print, and the Discord link.

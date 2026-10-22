@@ -630,6 +630,10 @@ fn animations_picker(app: &mut WordApp, ui: &mut Ui) {
 /// Interface language: follow the system (the default) or pick one (#8).
 fn language_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::i18n::{AUTO, Lang};
+    // The PPM build is always Korean: no choice to show.
+    if app.host_locked() {
+        return;
+    }
     // The language names are in their own scripts: fonts for them load from the next frame.
     app.want_system_cjk = true;
     let system = crate::i18n::system_lang();

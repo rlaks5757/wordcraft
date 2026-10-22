@@ -141,6 +141,13 @@ mod tests {
         let mut fresh = app();
         restore(&mut fresh, None, true);
         assert_eq!(fresh.ui.language, "ko");
+        // A stored English (the visitor chose it in an earlier session) is ignored too.
+        let mut english = app();
+        english.ui.language = "en".into();
+        let stored_en = serde_json::to_string(&english.prefs()).unwrap();
+        let mut host_en = app();
+        restore(&mut host_en, Some(&stored_en), true);
+        assert_eq!(host_en.ui.language, "ko");
 
         let mut upstream = app();
         restore(&mut upstream, Some(&stored), false);

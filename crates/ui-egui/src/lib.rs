@@ -7580,6 +7580,10 @@ mod tests {
     #[test]
     fn host_lock_closes_file_dialogs_pickers_and_menu_entries() {
         let mut a = locked_app();
+        // The PPM interface is always Korean: a stored or asked-for language changes nothing.
+        a.ui.language = "ko".into();
+        assert!(a.run("ui.language", json!({"value": "en"})).is_err());
+        assert_eq!(a.ui.language, "ko");
         for id in ["file.new", "file.open", "file.saveAs", "file.exportPdf", "file.print", "file.rename", "tools.recordMacro", "tools.macros"] {
             assert!(a.run(id, json!({})).is_err(), "{id} is refused");
             assert!(a.execute(id, json!({})).is_err(), "{id} is refused by execute");
