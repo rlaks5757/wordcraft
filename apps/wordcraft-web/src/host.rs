@@ -36,8 +36,8 @@ use wordcraft_ui_egui::{HostPolicySlot, Inbox, Services, WordApp};
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
 
-/// Most overrides read from a policy (the app has about 650 commands).
-const MAX_POLICY_IDS: usize = 1024;
+/// Most overrides read from a policy (the contract allows 4000).
+const MAX_POLICY_IDS: usize = 4096;
 
 /// Most table requests waiting for the next frame; more are dropped.
 const MAX_PENDING_TABLES: usize = 16;
