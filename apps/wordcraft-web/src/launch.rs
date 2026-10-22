@@ -9,6 +9,10 @@
 /// Whether this build is the PPM one. A compile-time value: no URL flag or stored setting turns it off.
 pub const HOST_BUILD: bool = cfg!(feature = "ppm-host");
 
+/// A string only the PPM build contains (`ppm/build-web.sh` looks for it in the wasm), logged once at start.
+#[cfg(feature = "ppm-host")]
+pub const HOST_MARKER: &str = "wordcraft-ppm-host-build";
+
 /// What the page shows when the PPM build is opened without PPM.
 pub const NEED_HOST_MESSAGE: &str = "PPM에서 열어 주세요";
 

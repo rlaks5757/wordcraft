@@ -35,6 +35,8 @@ pub fn start() {
         // `?host=parent`: a same-origin page framing WordCraft opens documents in it and stores
         // what it saves (`host`).
         let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        #[cfg(feature = "ppm-host")]
+        log::info!("{}", crate::launch::HOST_MARKER);
         // The PPM build runs only inside PPM: without the parent page it opens nothing.
         let host = match crate::launch::decide(crate::launch::HOST_BUILD, bridge.is_some()) {
             crate::launch::Launch::NeedHost => {

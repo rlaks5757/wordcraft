@@ -230,6 +230,23 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 /// The policies the parent's open messages carry, oldest first, until the app picks them up.
 pub type HostPolicySlot = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<wordcraft_engine::host_policy::HostPolicy>>>;
 
+/// Most parent documents waiting to open; a newer one pushes the oldest out.
+pub const MAX_HOST_QUEUE: usize = 8;
+
+/// Queue a parent document with its policy for [`WordApp`] (one policy per file, same order).
+/// Over [`MAX_HOST_QUEUE`] the oldest is dropped, with a log line.
+pub fn queue_host_file(inbox: &Inbox, slot: &HostPolicySlot, file: (String, Vec<u8>), policy: wordcraft_engine::host_policy::HostPolicy) {
+    let mut policies = slot.lock().unwrap_or_else(|e| e.into_inner());
+    let mut files = inbox.lock().unwrap_or_else(|e| e.into_inner());
+    while files.len() >= MAX_HOST_QUEUE {
+        let (dropped, _) = files.remove(0);
+        policies.pop_front();
+        log::warn!("too many documents waiting from the parent; dropped {dropped}");
+    }
+    policies.push_back(policy);
+    files.push(file);
+}
+
 /// Whether a pasted picture belongs in the document: the page has keyboard focus, and no
 /// Backstage or dialog is open (#1349). A focused text field (comment, Find box) means the page
 /// does not have focus, so `canvas_focused` already covers it; egui's own "wants keyboard input"
@@ -619,6 +636,9 @@ pub struct WordApp {
     saves_in_flight: Vec<SaveInFlight>,
     /// Web: the command a Save Changes prompt held back until its picker save ends (#1315).
     awaiting_save: Option<AwaitingSave>,
+    /// Host mode: the policy in force before a parent document's own policy was set, put back if
+    /// that document is not opened (Save Changes cancelled, or ended without opening).
+    host_policy_undo: Option<wordcraft_engine::host_policy::HostPolicy>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
@@ -722,6 +742,7 @@ impl WordApp {
             autosave_path: None,
             saves_in_flight: Vec::new(),
             awaiting_save: None,
+            host_policy_undo: None,
             change_picture_target: None,
             recipient_list_pending: false,
             font_generation: wordcraft_fonts::FontDb::global().generation(),
@@ -1144,7 +1165,7 @@ impl WordApp {
         }
         let go = match choice {
             SaveChoice::Cancel => {
-                self.session.disarm_host_open();
+                self.drop_host_open();
                 false
             }
             SaveChoice::DontSave => true,
@@ -1171,8 +1192,11 @@ impl WordApp {
             },
         };
         if !go {
+            // Nothing opens: a parent document waiting on this answer is dropped.
+            self.drop_host_open();
             return Ok(json!({"done": false}));
         }
+        self.host_policy_undo = None;
         self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
     }
 
@@ -2405,7 +2429,11 @@ impl WordApp {
         let Some(inbox) = self.services.host_inbox.clone() else { return };
         loop {
             if self.session.host_open_pending() {
-                return;
+                if self.host_open_waiting() {
+                    return;
+                }
+                // The answer ended without opening it (the prompt is gone and no save is running).
+                self.drop_host_open();
             }
             let file = {
                 let mut files = inbox.lock().unwrap_or_else(|e| e.into_inner());
@@ -2414,6 +2442,7 @@ impl WordApp {
             let Some((name, bytes)) = file else { return };
             // The policy arrives with the open message; a message without one means no switch changed.
             let policy = self.services.host_policy.as_ref().and_then(|slot| slot.lock().unwrap_or_else(|e| e.into_inner()).pop_front());
+            self.host_policy_undo = Some(self.session.host_policy().clone());
             self.session.set_host_policy(policy.unwrap_or_default());
             // The user's own Open is blocked in host mode; the parent's document is the one open
             // that passes the lock (it stays armed while a Save Changes prompt waits).
@@ -2421,10 +2450,30 @@ impl WordApp {
             let r = self.run("file.open", json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}));
             if !r.as_ref().is_ok_and(|v| v.get("pending").is_some()) {
                 self.session.disarm_host_open();
+                if r.is_ok() {
+                    self.host_policy_undo = None;
+                } else {
+                    self.drop_host_open();
+                }
             }
             if r.is_ok() {
                 self.ui.backstage = false;
             }
+        }
+    }
+
+    /// Whether an armed parent document still has something to wait for: its Save Changes prompt
+    /// (or another dialog), a save that is finishing, or a picker.
+    fn host_open_waiting(&self) -> bool {
+        self.dialog.is_some() || self.awaiting_save.is_some() || self.file_dialog_open()
+    }
+
+    /// Give up the armed parent document and put the earlier policy back, so a document that did
+    /// not open leaves the open one with its own policy.
+    fn drop_host_open(&mut self) {
+        self.session.disarm_host_open();
+        if let Some(before) = self.host_policy_undo.take() {
+            self.session.set_host_policy(before);
         }
     }
 
@@ -7457,6 +7506,45 @@ mod tests {
         assert!(body(&a).contains("second"));
         assert!(host.lock().unwrap().is_empty() && slot.lock().unwrap().is_empty());
         assert!(refused(&mut a, "file.print"), "with the second message's policy");
+    }
+
+    /// A grant that nobody waits for any more (the prompt is gone) does not stop later documents,
+    /// and a document that was cancelled leaves the open one with its own policy.
+    #[test]
+    fn host_lock_a_stale_grant_and_a_cancelled_policy_do_not_stick() {
+        use wordcraft_engine::host_policy::HostPolicy;
+        let mut a = locked_app();
+        let (host, slot) = (Inbox::default(), HostPolicySlot::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.host_policy = Some(slot.clone());
+        a.session.arm_host_open("gone.txt");
+        queue_host_file(&host, &slot, ("next.txt".into(), b"next".to_vec()), HostPolicy::default());
+        a.drain_host_inbox();
+        assert!(body(&a).contains("next"), "the stale grant did not block the next document");
+        // Cancel: the second message's policy does not stay on the first document.
+        a.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        let printing = HostPolicy::new([("file.print".to_string(), true)]);
+        queue_host_file(&host, &slot, ("two.txt".into(), b"two".to_vec()), printing);
+        a.drain_host_inbox();
+        assert!(a.dialog.is_some());
+        a.answer_save_changes(SaveChoice::Cancel).unwrap();
+        assert!(body(&a).contains("unsaved"));
+        assert!(a.run("file.print", json!({})).err().is_some_and(|e| e.contains("not available in PPM")), "back to the first document's policy");
+    }
+
+    /// The queue keeps the newest few documents, each with its own policy.
+    #[test]
+    fn host_queue_drops_the_oldest_over_the_limit() {
+        use wordcraft_engine::host_policy::HostPolicy;
+        let (host, slot) = (Inbox::default(), HostPolicySlot::default());
+        for i in 0..MAX_HOST_QUEUE + 3 {
+            queue_host_file(&host, &slot, (format!("{i}.txt"), vec![]), HostPolicy::new([(format!("id{i}"), true)]));
+        }
+        let files = host.lock().unwrap();
+        assert_eq!(files.len(), MAX_HOST_QUEUE);
+        assert_eq!(files[0].0, "3.txt");
+        assert_eq!(slot.lock().unwrap().len(), MAX_HOST_QUEUE);
+        assert!(slot.lock().unwrap()[0].command_on("id3") || !slot.lock().unwrap()[0].command_on("id0"));
     }
 
     /// Host mode: each platform function that reaches the user's machine is closed.

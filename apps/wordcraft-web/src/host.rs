@@ -31,7 +31,7 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use wordcraft_ui_egui::host_table::{self, MAX_CELL_CHARS, MAX_COLS, MAX_ROWS};
 use wordcraft_engine::host_policy::HostPolicy;
-use wordcraft_ui_egui::{HostPolicySlot, Inbox, Services, WordApp};
+use wordcraft_ui_egui::{HostPolicySlot, Inbox, Services, WordApp, queue_host_file};
 
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
@@ -156,9 +156,8 @@ impl Bridge {
                 Some("wordcraft:open") => {
                     let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Document.docx".to_string());
                     let Some(bytes) = bytes(&data) else { return };
-                    // The policy goes in before the file, so the app finds both together (one per file).
-                    policy_slot.lock().unwrap_or_else(|e| e.into_inner()).push_back(policy(&data));
-                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                    // The policy goes in with the file (one per file, the queue is capped).
+                    queue_host_file(&inbox, &policy_slot, (name, bytes), policy(&data));
                 }
                 Some("wordcraft:insert-table") => {
                     // Without a usable id there is nobody to answer.

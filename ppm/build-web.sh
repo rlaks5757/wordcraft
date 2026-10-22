@@ -17,13 +17,13 @@ case "${1:-}" in
   --fast) trunk build --cargo-profile web-fast --features ppm-host ;;
   *) echo "usage: $0 [--fast]" >&2; exit 2 ;;
 esac
-# ppm-host가 실제로 켜졌는지: 이번 빌드의 wasm에 잠금 화면 문자열이 없으면 실패한다(feature가 빠지면 잠금이 소리 없이 꺼진다).
+# ppm-host가 실제로 켜졌는지: 이번 빌드의 wasm에 ppm-host 전용 표식 문자열(launch::HOST_MARKER)이 없으면 실패한다(feature가 빠지면 잠금이 소리 없이 꺼진다).
 host_wasm=0
 while IFS= read -r wasm; do
-  if grep -aq "PPM에서 열어 주세요" "$wasm"; then host_wasm=1; fi
+  if grep -aq "wordcraft-ppm-host-build" "$wasm"; then host_wasm=1; fi
 done < <(find "$root/dist/web" -name '*_bg.wasm' -newer "$stamp")
 if [ "$host_wasm" != 1 ]; then
-  echo "error: 이번 빌드의 wasm에 ppm-host 잠금 문자열이 없다(feature가 적용되지 않음)" >&2
+  echo "error: 이번 빌드의 wasm에 ppm-host 표식이 없다(feature가 적용되지 않음)" >&2
   exit 1
 fi
 # OFL-1.1 §2: the license travels with the embedded font.
@@ -35,4 +35,5 @@ cd "$root"
 tmp_cmds="$(mktemp)"
 trap 'rm -f "$stamp" "$tmp_cmds"' EXIT
 cargo run -q -p wordcraft-ui-egui --example commands_json > "$tmp_cmds"
+chmod 644 "$tmp_cmds"
 mv "$tmp_cmds" "$root/dist/web/commands.json"
