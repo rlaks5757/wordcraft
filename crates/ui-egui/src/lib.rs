@@ -1196,7 +1196,6 @@ impl WordApp {
             self.drop_host_open();
             return Ok(json!({"done": false}));
         }
-        self.host_policy_undo = None;
         self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
     }
 
@@ -1218,7 +1217,17 @@ impl WordApp {
             };
         }
         let retry = (id == "file.open").then(|| params.clone());
+        // An armed parent document is used up by this open: it either took the held-back policy
+        // for good or failed and gives it back (a password prompt keeps the grant waiting).
+        let armed = id == "file.open" && self.session.host_open_pending();
         let r = self.execute(id, params);
+        if armed {
+            match &r {
+                Ok(_) => self.host_policy_undo = None,
+                Err(e) if !wordcraft_engine::io::needs_password(e) => self.drop_host_open(),
+                Err(_) => {}
+            }
+        }
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
         {
@@ -7532,19 +7541,39 @@ mod tests {
         assert!(a.run("file.print", json!({})).err().is_some_and(|e| e.contains("not available in PPM")), "back to the first document's policy");
     }
 
+    /// A parent document that fails to open after "Don't Save" gives the earlier policy back.
+    #[test]
+    fn host_lock_a_failed_open_after_dont_save_restores_the_policy() {
+        use wordcraft_engine::host_policy::HostPolicy;
+        let mut a = locked_app();
+        let (host, slot) = (Inbox::default(), HostPolicySlot::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.host_policy = Some(slot.clone());
+        a.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        // Not valid .docx content, so the open fails once the changes are discarded.
+        queue_host_file(&host, &slot, ("bad.docx".into(), b"not a zip".to_vec()), HostPolicy::new([("file.print".to_string(), true)]));
+        a.drain_host_inbox();
+        assert!(a.dialog.is_some());
+        let _ = a.answer_save_changes(SaveChoice::DontSave);
+        assert!(a.run("file.print", json!({})).err().is_some_and(|e| e.contains("not available in PPM")), "the failed document's policy was given back");
+        assert!(a.host_policy_undo.is_none() && !a.session.host_open_pending());
+    }
+
     /// The queue keeps the newest few documents, each with its own policy.
     #[test]
     fn host_queue_drops_the_oldest_over_the_limit() {
         use wordcraft_engine::host_policy::HostPolicy;
         let (host, slot) = (Inbox::default(), HostPolicySlot::default());
         for i in 0..MAX_HOST_QUEUE + 3 {
-            queue_host_file(&host, &slot, (format!("{i}.txt"), vec![]), HostPolicy::new([(format!("id{i}"), true)]));
+            queue_host_file(&host, &slot, (format!("{i}.txt"), vec![]), HostPolicy::new([("file.print".to_string(), i == 3)]));
         }
         let files = host.lock().unwrap();
         assert_eq!(files.len(), MAX_HOST_QUEUE);
         assert_eq!(files[0].0, "3.txt");
         assert_eq!(slot.lock().unwrap().len(), MAX_HOST_QUEUE);
-        assert!(slot.lock().unwrap()[0].command_on("id3") || !slot.lock().unwrap()[0].command_on("id0"));
+        // The first policy left is the fourth one (the only one that switched printing on).
+        assert!(slot.lock().unwrap()[0].command_on("file.print"));
+        assert!(!slot.lock().unwrap()[1].command_on("file.print"));
     }
 
     /// Host mode: each platform function that reaches the user's machine is closed.
