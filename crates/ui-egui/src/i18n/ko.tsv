@@ -2542,3 +2542,151 @@ preview	Title	제목
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	5 cm 또는 300 px처럼 원하는 단위로 크기를 입력하세요. 다른 쪽도 함께 바뀌어 그림의 비율이 유지됩니다.
 
 	Import…	가져오기…
+	Account	계정
+	Add Condition	조건 추가
+	Add whether it is above or below	위 또는 아래 여부 추가
+	And	그리고
+	Ascending	오름차순
+	Auto ({percent}%)	자동 ({percent}%)
+	Automatically add words to list (First Letter)	목록에 단어 자동 추가 (첫 글자)
+	Automatically add words to list (INitial CAps)	목록에 단어 자동 추가 (대문자 두 개로 시작)
+	Bookmarks	책갈피
+	Column width	열 너비
+	Compare to	비교 대상
+	Comparison	비교
+	Contains	포함
+	Continue without restoring	복원하지 않고 계속
+	Couldn't save {name}, so it is still open and nothing was lost: {error}	{name}을(를) 저장하지 못했지만 문서는 그대로 열려 있고 잃은 내용은 없습니다: {error}
+	Croatian	크로아티아어
+	Crop on the page works on unturned pictures: set Rotation to 0° first, or use the crop boxes	페이지에서 자르기는 회전하지 않은 그림에서만 됩니다. 먼저 회전을 0°로 하거나 자르기 상자를 사용하세요
+	Current Document	현재 문서
+	Custom size	사용자 지정 크기
+	Descending	내림차순
+	Dictionaries	사전
+	Dictionaries folder:	사전 폴더:
+	Discard	삭제
+	Discard the recovery copy of {name}?	{name}의 복구 사본을 삭제할까요?
+	Discard…	삭제…
+	Document name	문서 이름
+	Does not contain	포함하지 않음
+	Edit Document	문서 편집
+	Enter bookmark name:	책갈피 이름 입력:
+	Equal to	같음
+	Existing File or Web Page	기존 파일/웹 페이지
+	Filter and Sort	필터 및 정렬
+	Find “{text}” in the document	문서에서 “{text}” 찾기
+	For which item:	대상 항목:
+	Go to what:	이동 대상:
+	Greater than	보다 큼
+	Greater than or equal	크거나 같음
+	Heading	제목
+	Heading text	제목 텍스트
+	Hidden bookmarks	숨겨진 책갈피
+	Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.	이 폴더의 Hunspell .aff, .dic 파일(pl_PL, pt_BR, it_IT, hr_HR, tr_TR)을 시스템 사전보다 먼저 사용합니다.
+	Imported 1 source	원본 1개를 가져왔습니다
+	Imported {n} sources	원본 {n}개를 가져왔습니다
+	In the margin	여백에
+	Insert reference to:	참조 대상 삽입:
+	Is blank	비어 있음
+	Is not blank	비어 있지 않음
+	Language Preferences…	언어 기본 설정…
+	Large	크게
+	Leave out the date and time of comments and tracked changes when saving	저장할 때 메모와 변경 내용 추적의 날짜와 시간 제외
+	Less than	보다 작음
+	Less than or equal	작거나 같음
+	Limit and	제한 및
+	Link to:	연결 대상:
+	Local recovery is unavailable or still loading.	로컬 복구를 사용할 수 없거나 아직 불러오는 중입니다.
+	Log	기록
+	Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate.	리본, 메뉴, 대화 상자를 더 크게 또는 작게 표시합니다. 자동은 시스템 화면 배율을 따르고, 100%는 1포인트당 화면 픽셀 1개입니다. 문서 확대/축소와는 별개입니다.
+	Mirror margins	대칭 여백
+	More Paper Sizes…	기타 용지 크기…
+	Moved from:	이동 전:
+	Moved to:	이동 후:
+	Moved objects snap to the page's edges and centre, the margins and other objects. Hold Alt to move freely.	이동하는 개체가 페이지 가장자리와 가운데, 여백, 다른 개체에 맞춰집니다. Alt를 누르면 자유롭게 이동합니다.
+	No document is open. Create a document or open one first.	열려 있는 문서가 없습니다. 먼저 문서를 만들거나 여세요.
+	No new sources in that file	그 파일에 새 원본이 없습니다
+	No recovery copies.	복구 사본이 없습니다.
+	No spelling dictionary for {language} is installed, so it isn't checked. WordCraft looks for the Hunspell dictionary {name} in the WORDCRAFT_DICTIONARIES folder and in the usual system locations.	{language} 맞춤법 사전이 설치되어 있지 않아 검사하지 않습니다. WordCraft는 WORDCRAFT_DICTIONARIES 폴더와 일반적인 시스템 위치에서 Hunspell 사전 {name}을(를) 찾습니다.
+	Not equal to	같지 않음
+	Not set: the system's usual places	설정 안 함: 시스템의 일반적인 위치
+	Nothing of this type in the document.	문서에 이 형식의 항목이 없습니다.
+	Number only, without the label's words	레이블 단어 없이 번호만
+	Only for the selected text	선택한 텍스트에만
+	Open a document first	먼저 문서를 여세요
+	Or	또는
+	Paper	용지
+	Paper size:	용지 크기:
+	Place in This Document	현재 문서
+	Print settings	인쇄 설정
+	Privacy for this document	이 문서의 개인 정보
+	Reading Mode	읽기 모드
+	Recover	복구
+	Recovery copy	복구 사본
+	Recovery is disabled while this document has a password.	이 문서에 암호가 있는 동안에는 복구를 사용할 수 없습니다.
+	Reference type:	참조 형식:
+	Remove condition	조건 제거
+	Remove my name from comments, changes and file properties when saving	저장할 때 메모, 변경 내용, 파일 속성에서 내 이름 제거
+	Rename	이름 바꾸기
+	Researcher needs an online service; WordCraft keeps your documents offline.	리서처는 온라인 서비스가 필요합니다. WordCraft는 문서를 오프라인으로 유지합니다.
+	Restore	복원
+	Restore opens an unsaved copy. Your original file stays unchanged.	복원하면 저장되지 않은 사본이 열립니다. 원본 파일은 그대로 유지됩니다.
+	Saving {name} was cancelled, so it is still open and nothing was lost.	{name} 저장이 취소되었지만 문서는 그대로 열려 있고 잃은 내용은 없습니다.
+	Scale to paper size	용지 크기에 맞게 조정
+	Select a place in this document:	이 문서에서 위치 선택:
+	Set Proofing Language…	언어 교정 설정…
+	Show alignment guides when moving pictures and shapes	그림과 도형을 이동할 때 맞춤 안내선 표시
+	Show its list number	해당 목록 번호 표시
+	Show its number relative to this field	이 필드 기준 상대 번호 표시
+	Show its number with all higher levels	상위 수준을 모두 포함한 번호 표시
+	Sort by	정렬 기준
+	Sort by:	정렬 기준:
+	Style name:	스타일 이름:
+	Submit print job	인쇄 작업 보내기
+	Suggested	추천
+	Take the last match on the page	페이지에서 마지막으로 일치하는 항목 사용
+	Text of the nearest paragraph with a given style (running headers)	지정한 스타일의 가장 가까운 단락 텍스트 (러닝 헤더)
+	Text size	텍스트 크기
+	The document you are editing keeps the names and dates; only the saved file leaves them out.	편집 중인 문서에는 이름과 날짜가 남아 있고, 저장된 파일에서만 제외됩니다.
+	The margins don't fit on a page this size; make the margins smaller first.	이 크기의 페이지에는 여백이 맞지 않습니다. 먼저 여백을 줄이세요.
+	The number must be a divisor of {max}.	숫자는 {max}의 약수여야 합니다.
+	The spelling dictionary for {language} couldn't be read, so it isn't checked. File: {file}. Reason: {reason}	{language} 맞춤법 사전을 읽을 수 없어 검사하지 않습니다. 파일: {file}. 이유: {reason}
+	Then by	다음 기준
+	These settings will be used for new documents.	이 설정은 새 문서에 사용됩니다.
+	This cannot be undone. Your original file stays unchanged.	이 작업은 되돌릴 수 없습니다. 원본 파일은 그대로 유지됩니다.
+	This document has no bookmarks.	이 문서에는 책갈피가 없습니다.
+	Top of the Document	문서 맨 위
+	Trust Center	보안 센터
+	Type +2 or -1 to move from the page you are on.	현재 페이지 기준으로 이동하려면 +2 또는 -1을 입력하세요.
+	Type a page number, or +2 / -1.	페이지 번호 또는 +2 / -1을 입력하세요.
+	Use the browser's full screen (F11)	브라우저 전체 화면 사용 (F11)
+	Wait for the print job to finish submitting before closing.	닫기 전에 인쇄 작업 전송이 끝날 때까지 기다리세요.
+	Waiting for the save to finish…	저장이 끝나기를 기다리는 중…
+	Word 2003 XML Document (*.xml)	Word 2003 XML 문서 (*.xml)
+	can't split at the first row	첫 행에서는 나눌 수 없습니다
+	nothing is selected	선택한 항목이 없습니다
+	select a picture first	먼저 그림을 선택하세요
+	select a picture or shape first	먼저 그림이나 도형을 선택하세요
+	select recipients first	먼저 받는 사람을 선택하세요
+	select two or more cells to merge	병합할 셀을 둘 이상 선택하세요
+	select two or more pictures or shapes first (Shift+click)	먼저 그림이나 도형을 둘 이상 선택하세요 (Shift+클릭)
+	template	서식 파일
+	text boxes can't go inside a text box	텍스트 상자 안에 텍스트 상자를 넣을 수 없습니다
+	the cursor isn't in a table	커서가 표 안에 있지 않습니다
+	the paragraph is empty	단락이 비어 있습니다
+	the paragraph starts with a space	단락이 공백으로 시작합니다
+	there is no ink to replay	다시 재생할 잉크가 없습니다
+	there's no citation after the caret	커서 뒤에 인용이 없습니다
+	this item is already at the top level	이 항목은 이미 최상위 수준입니다
+	{count} of {total} recipients will be merged.	받는 사람 {total}명 중 {count}명이 병합됩니다.
+	{kind}, {columns} × {rows}, {size} ({paper})	{kind}, {columns} × {rows}, {size} ({paper})
+	{language} (dictionary unreadable)	{language} (사전을 읽을 수 없음)
+	{language} (no dictionary)	{language} (사전 없음)
+	{language}: no dictionary found	{language}: 사전을 찾을 수 없음
+	{language}: {file}	{language}: {file}
+	{language}: {file} (unreadable: {reason})	{language}: {file} (읽을 수 없음: {reason})
+	{name} options	{name} 옵션
+	{paper}   {width} × {height}	{paper}   {width} × {height}
+	{width} × {height} mm	{width} × {height} mm
+	{name}   {height} × {width} mm	{name}   {height} × {width} mm
+	{name}   {height} × {width} in	{name}   {height} × {width} in

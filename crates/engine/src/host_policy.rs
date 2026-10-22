@@ -216,11 +216,14 @@ pub fn grade(id: &str) -> Option<Grade> {
 /// Allowed only when Save As (`file.saveAs`) is on.
 const SAVE_PARAMS_REFUSED: [&str; 3] = ["path", "password", "format"];
 
+/// What a refusal says (the PPM interface is Korean): the command or page is switched off for the parent.
+pub const NOT_AVAILABLE: &str = "PPM에서는 사용할 수 없습니다";
+
 /// `Err` says why a locked session refuses `id` with `params` under `policy`: the command's grade
 /// and the parent's override decide, and Save to another name, format or password needs Save As.
 pub fn check(id: &str, params: &Value, policy: &HostPolicy) -> Result<(), String> {
     if !policy.command_on(id) {
-        return Err(format!("{id}: not available in PPM"));
+        return Err(format!("{id}: {NOT_AVAILABLE}"));
     }
     if id == "file.save"
         && !policy.command_on("file.saveAs")
@@ -449,7 +452,7 @@ mod tests {
         for id in ALLOWED {
             let r = s.run(id, &json!({"path": "/nonexistent/x", "data": "!!", "text": "t", "value": true}));
             if let Err(CmdError::Disabled(why)) = &r {
-                assert!(!why.contains("not available in PPM"), "{id} ran a command the lock refuses: {why}");
+                assert!(!why.contains(NOT_AVAILABLE), "{id} ran a command the lock refuses: {why}");
             }
         }
     }

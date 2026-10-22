@@ -12,7 +12,8 @@ pub const KEY: &str = "wordcraft.ui";
 const MAX_STORED: usize = 4 << 20;
 
 /// Apply preferences stored on an earlier visit. Missing, oversized or unreadable values leave
-/// the defaults. `host`: PPM's page owns the files, so no recent file names are taken back.
+/// the defaults. `host`: PPM's page owns the files, so no recent file names are taken back, and the
+/// interface is Korean whatever the browser or the stored setting says.
 pub fn restore(app: &mut WordApp, stored: Option<&str>, host: bool) {
     if let Some(s) = stored.filter(|s| s.len() <= MAX_STORED)
         && let Some(ui) = UiState::from_json(s.as_bytes())
@@ -21,8 +22,12 @@ pub fn restore(app: &mut WordApp, stored: Option<&str>, host: bool) {
     }
     if host {
         app.ui.recent.clear();
+        app.ui.language = HOST_LANGUAGE.into();
     }
 }
+
+/// The interface language of the PPM (host) build.
+const HOST_LANGUAGE: &str = "ko";
 
 /// Tracks what was last written, so the store is written only when a preference changed.
 #[derive(Default)]
@@ -119,5 +124,29 @@ mod tests {
         // A name that shows up later is not written either.
         host.ui.recent = vec!["/x/late.docx".into()];
         assert_eq!(sync.changed(&host), None);
+    }
+
+    /// The PPM build starts in Korean whatever the browser or an earlier visit chose; the
+    /// upstream build keeps following the system (`auto`) or the stored choice.
+    #[test]
+    fn host_mode_starts_in_korean() {
+        let mut other = app();
+        other.ui.language = "de".into();
+        let stored = serde_json::to_string(&other.prefs()).unwrap();
+
+        let mut host = app();
+        restore(&mut host, Some(&stored), true);
+        assert_eq!(host.ui.language, "ko");
+        assert_eq!(wordcraft_ui_egui::i18n::Lang::from_pref(&host.ui.language).code(), "ko");
+        let mut fresh = app();
+        restore(&mut fresh, None, true);
+        assert_eq!(fresh.ui.language, "ko");
+
+        let mut upstream = app();
+        restore(&mut upstream, Some(&stored), false);
+        assert_eq!(upstream.ui.language, "de");
+        let mut auto = app();
+        restore(&mut auto, None, false);
+        assert_eq!(auto.ui.language, wordcraft_ui_egui::i18n::AUTO);
     }
 }

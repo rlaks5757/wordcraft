@@ -7447,7 +7447,7 @@ mod tests {
         let (host, slot) = (Inbox::default(), HostPolicySlot::default());
         a.services.host_inbox = Some(host.clone());
         a.services.host_policy = Some(slot.clone());
-        let refused = |a: &mut WordApp, id: &str| a.run(id, json!({})).err().is_some_and(|e| e.contains("not available in PPM"));
+        let refused = |a: &mut WordApp, id: &str| a.run(id, json!({})).err().is_some_and(|e| e.contains(wordcraft_engine::host_policy::NOT_AVAILABLE));
         assert!(refused(&mut a, "file.saveAs") && refused(&mut a, "ui.print") && refused(&mut a, "ui.discord"));
         let on = [("file.print", true), ("file.saveAs", true), ("ui.externalLinks", true), ("format.bold", false), ("file.open", true), ("no.suchCommand", true)];
         slot.lock().unwrap().push_back(overrides(&on));
@@ -7497,7 +7497,7 @@ mod tests {
         a.services.host_inbox = Some(host.clone());
         a.services.host_policy = Some(slot.clone());
         let printing = HostPolicy::new([("file.print".to_string(), true)]);
-        let refused = |a: &mut WordApp, id: &str| a.run(id, json!({})).err().is_some_and(|e| e.contains("not available in PPM"));
+        let refused = |a: &mut WordApp, id: &str| a.run(id, json!({})).err().is_some_and(|e| e.contains(wordcraft_engine::host_policy::NOT_AVAILABLE));
         slot.lock().unwrap().push_back(printing);
         host.lock().unwrap().push(("one.txt".into(), b"first".to_vec()));
         slot.lock().unwrap().push_back(HostPolicy::default());
@@ -7538,7 +7538,7 @@ mod tests {
         assert!(a.dialog.is_some());
         a.answer_save_changes(SaveChoice::Cancel).unwrap();
         assert!(body(&a).contains("unsaved"));
-        assert!(a.run("file.print", json!({})).err().is_some_and(|e| e.contains("not available in PPM")), "back to the first document's policy");
+        assert!(a.run("file.print", json!({})).err().is_some_and(|e| e.contains(wordcraft_engine::host_policy::NOT_AVAILABLE)), "back to the first document's policy");
     }
 
     /// A parent document that fails to open after "Don't Save" gives the earlier policy back.
@@ -7555,7 +7555,7 @@ mod tests {
         a.drain_host_inbox();
         assert!(a.dialog.is_some());
         let _ = a.answer_save_changes(SaveChoice::DontSave);
-        assert!(a.run("file.print", json!({})).err().is_some_and(|e| e.contains("not available in PPM")), "the failed document's policy was given back");
+        assert!(a.run("file.print", json!({})).err().is_some_and(|e| e.contains(wordcraft_engine::host_policy::NOT_AVAILABLE)), "the failed document's policy was given back");
         assert!(a.host_policy_undo.is_none() && !a.session.host_open_pending());
     }
 

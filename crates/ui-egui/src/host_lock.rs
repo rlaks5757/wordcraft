@@ -88,17 +88,17 @@ pub fn grade_ui(id: &str) -> Option<Grade> {
 /// `Err` says why a locked app refuses the `ui.*` command `id` with `params`.
 pub fn check_ui(id: &str, params: &Value, policy: &HostPolicy) -> Result<(), String> {
     if !grade_ui(id).is_some_and(|g| policy.allows(policy_id(id), g)) {
-        return Err(format!("{id}: not available in PPM"));
+        return Err(format!("{id}: {}", wordcraft_engine::host_policy::NOT_AVAILABLE));
     }
     let name = params.get("name").and_then(Value::as_str);
     if id == "ui.dialog" && name.is_some_and(|n| BLOCKED_DIALOGS.contains(&n)) {
-        return Err(format!("the {} dialog is not available in PPM", name.unwrap_or_default()));
+        return Err(format!("{} 대화상자: {}", name.unwrap_or_default(), wordcraft_engine::host_policy::NOT_AVAILABLE));
     }
     if id == "ui.backstage"
         && let Some(page) = params.get("page").and_then(Value::as_str)
         && !backstage_page_allowed(page, policy)
     {
-        return Err(format!("the {page} page is not available in PPM"));
+        return Err(format!("{page} 페이지: {}", wordcraft_engine::host_policy::NOT_AVAILABLE));
     }
     Ok(())
 }
@@ -106,6 +106,10 @@ pub fn check_ui(id: &str, params: &Value, policy: &HostPolicy) -> Result<(), Str
 /// Korean name for a UI text; `None` where the catalog has none.
 fn ko(text: &str) -> Option<String> {
     let lang = crate::i18n::Lang::from_code("ko")?;
+    // A label with no letters ("100%") reads the same in every language.
+    if !text.chars().any(char::is_alphabetic) {
+        return Some(text.to_string());
+    }
     crate::i18n::has(lang, text).then(|| crate::i18n::tr(lang, text).to_string())
 }
 
@@ -179,6 +183,11 @@ mod tests {
             assert!(check_ui(id, &json!({}), off).is_err(), "{id}");
         }
         assert!(check_ui("ui.dialog", &json!({"name": "renameDocument"}), off).is_err());
+        // A refusal is worded in Korean, with the part the callers look for.
+        for why in [check_ui("ui.print", &json!({}), off), check_ui("ui.dialog", &json!({"name": "renameDocument"}), off), check_ui("ui.backstage", &json!({"page": "open"}), off)] {
+            let why = why.unwrap_err();
+            assert!(why.contains(wordcraft_engine::host_policy::NOT_AVAILABLE), "{why}");
+        }
         assert!(check_ui("ui.dialog", &json!({"name": "templates"}), off).is_ok(), "styles go into the document");
         assert!(check_ui("ui.dialog", &json!({"name": "font"}), off).is_ok());
         assert!(check_ui("ui.dialog", &json!({"name": "compare"}), off).is_ok(), "compare puts a file into the document");
@@ -207,6 +216,14 @@ mod tests {
         assert!(check_ui("ui.backstage", &json!({"page": "saveAs"}), &export).is_ok());
         assert!(check_ui("ui.backstage", &json!({"page": "export"}), &export).is_ok());
         assert!(check_ui("ui.backstage", &json!({"page": "open"}), &export).is_err());
+    }
+
+    /// The admin screen shows the Korean name: every command has one.
+    #[test]
+    fn every_command_has_a_korean_label() {
+        let file = commands_json();
+        let missing: Vec<&str> = file["commands"].as_array().unwrap().iter().filter(|c| c["labelKo"].as_str().is_none_or(str::is_empty)).filter_map(|c| c["id"].as_str()).collect();
+        assert!(missing.is_empty(), "no Korean label: {missing:?}");
     }
 
     /// commands.json lists exactly the engine's commands with the grade the lock enforces.
