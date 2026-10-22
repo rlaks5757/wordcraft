@@ -103,17 +103,16 @@ pub fn check_ui(id: &str, params: &Value, policy: &HostPolicy) -> Result<(), Str
     Ok(())
 }
 
-/// Korean name for a UI text, with the English kept where the catalog has none.
-fn ko(text: &str) -> String {
-    match crate::i18n::Lang::from_code("ko") {
-        Some(lang) => crate::i18n::tr(lang, text).to_string(),
-        None => text.to_string(),
-    }
+/// Korean name for a UI text; `None` where the catalog has none.
+fn ko(text: &str) -> Option<String> {
+    let lang = crate::i18n::Lang::from_code("ko")?;
+    crate::i18n::has(lang, text).then(|| crate::i18n::tr(lang, text).to_string())
 }
 
-/// The command list the admin screen reads (`commands.json`): every engine command with its
-/// grade, English and Korean name and menu place, plus [`EXTERNAL_LINKS`]. Built from the same
-/// tables the lock enforces, so the file can't disagree with them.
+/// The command list the admin screen reads (`commands.json`, the format all four apps share):
+/// every engine command with its English and Korean name, menu place and grade, plus
+/// [`EXTERNAL_LINKS`]. Built from the same tables the lock enforces, so the file can't disagree
+/// with them.
 pub fn commands_json() -> Value {
     let registry = wordcraft_engine::cmd::registry();
     let mut list: Vec<Value> = registry
@@ -121,14 +120,14 @@ pub fn commands_json() -> Value {
         .iter()
         .map(|c| {
             let grade = wordcraft_engine::host_policy::grade(c.id).map_or("locked", Grade::as_str);
-            let place_ko = c.location.split(" \u{203a} ").map(ko).collect::<Vec<_>>().join(" \u{203a} ");
-            serde_json::json!({"id": c.id, "label": c.label, "labelKo": ko(c.label), "location": c.location, "locationKo": place_ko, "grade": grade})
+            let place: Vec<&str> = c.location.split(" \u{203a} ").filter(|p| !p.is_empty()).collect();
+            serde_json::json!({"id": c.id, "label": c.label, "labelKo": ko(c.label), "location": place, "grades": {"builder": grade}})
         })
         .collect();
     list.push(serde_json::json!({
-        "id": EXTERNAL_LINKS, "label": "External links", "labelKo": "외부 링크", "location": "File \u{203a} Info", "locationKo": "파일 \u{203a} 정보", "grade": "off",
+        "id": EXTERNAL_LINKS, "label": "External links", "labelKo": "외부 링크", "location": ["File", "Info"], "grades": {"builder": "off"},
     }));
-    serde_json::json!({"app": "wordcraft", "commands": list})
+    serde_json::json!({"app": "word", "schema": 1, "commands": list})
 }
 
 #[cfg(test)]
@@ -221,21 +220,25 @@ mod tests {
         for c in list {
             let id = c["id"].as_str().unwrap();
             assert!(ids.insert(id), "{id} twice");
-            for key in ["label", "labelKo", "location", "locationKo"] {
-                assert!(c[key].as_str().is_some_and(|t| !t.is_empty()), "{id} has no {key}");
-            }
+            assert!(c["label"].as_str().is_some_and(|t| !t.is_empty()), "{id} has no label");
+            assert!(c["labelKo"].is_null() || c["labelKo"].is_string(), "{id}");
+            assert!(c["location"].as_array().is_some_and(|l| l.iter().all(|p| p.is_string())), "{id} location is a list of names");
+            assert_eq!(c["grades"].as_object().map(|g| g.len()), Some(1), "{id} has the builder grade only");
             if id == EXTERNAL_LINKS {
-                assert_eq!(c["grade"], "off");
+                assert_eq!(c["grades"]["builder"], "off");
                 continue;
             }
             let grade = wordcraft_engine::host_policy::grade(id).expect("classified");
-            assert_eq!(c["grade"], grade.as_str(), "{id}");
+            assert_eq!(c["grades"]["builder"], grade.as_str(), "{id}");
         }
         for id in ["file.open", "file.print", "format.bold"] {
             let c = list.iter().find(|c| c["id"] == id).unwrap();
-            assert_eq!(c["grade"], wordcraft_engine::host_policy::grade(id).unwrap().as_str());
+            assert_eq!(c["grades"]["builder"], wordcraft_engine::host_policy::grade(id).unwrap().as_str());
         }
         let bold = list.iter().find(|c| c["id"] == "format.bold").unwrap();
-        assert_ne!(bold["labelKo"], bold["label"], "Bold has a Korean name");
+        assert_eq!(bold["labelKo"], "굵게");
+        assert_eq!(bold["location"], serde_json::json!(["Home", "Font"]));
+        assert_eq!(file["app"], "word");
+        assert_eq!(file["schema"], 1);
     }
 }
