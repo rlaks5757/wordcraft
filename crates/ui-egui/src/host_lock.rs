@@ -59,7 +59,7 @@ pub fn backstage_page_allowed(page: &str, policy: &HostPolicy) -> bool {
         "info" | "save" | "options" => true,
         "print" => policy.command_on("file.print"),
         "saveAs" => policy.command_on("file.saveAs"),
-        "export" => policy.command_on("file.exportPdf"),
+        "export" => policy.command_on("file.exportPdf") || policy.command_on("file.exportPng"),
         _ => false,
     }
 }

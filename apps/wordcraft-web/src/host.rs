@@ -36,9 +36,6 @@ use wordcraft_ui_egui::{HostPolicySlot, Inbox, Services, WordApp};
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
 
-/// Most overrides read from a policy (the contract allows 4000).
-const MAX_POLICY_IDS: usize = 4096;
-
 /// Most table requests waiting for the next frame; more are dropped.
 const MAX_PENDING_TABLES: usize = 16;
 
@@ -159,8 +156,8 @@ impl Bridge {
                 Some("wordcraft:open") => {
                     let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Document.docx".to_string());
                     let Some(bytes) = bytes(&data) else { return };
-                    // The policy goes in before the file, so the app finds both together.
-                    *policy_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(policy(&data));
+                    // The policy goes in before the file, so the app finds both together (one per file).
+                    policy_slot.lock().unwrap_or_else(|e| e.into_inner()).push_back(policy(&data));
                     inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
                 }
                 Some("wordcraft:insert-table") => {
@@ -194,18 +191,18 @@ fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
     Some(m)
 }
 
-/// The per-command switches of the open message's `policy.overrides` (`{ "<command id>": bool }`).
-/// A missing or malformed policy changes nothing; entries whose value is not a boolean are skipped,
-/// and ids that are no command do nothing.
+/// The per-command switches of the open message's `policy.overrides` (`{ "<command id>": bool }`),
+/// read as [`HostPolicy::from_entries`] does: a missing or malformed policy changes nothing, a
+/// value that is not a boolean is skipped, an id that is no command does nothing.
 fn policy(data: &JsValue) -> HostPolicy {
     let get = |from: &JsValue, key: &str| js_sys::Reflect::get(from, &JsValue::from_str(key)).ok();
     let Some(overrides) = get(data, "policy").and_then(|p| get(&p, "overrides")).filter(|o| o.is_object() && !js_sys::Array::is_array(o)) else {
         return HostPolicy::default();
     };
     let entries = js_sys::Object::entries(&js_sys::Object::from(overrides));
-    HostPolicy::new(entries.iter().take(MAX_POLICY_IDS).filter_map(|e| {
+    HostPolicy::from_entries(entries.iter().filter_map(|e| {
         let pair = js_sys::Array::from(&e);
-        Some((pair.get(0).as_string()?, pair.get(1).as_bool()?))
+        Some((pair.get(0).as_string()?, pair.get(1).as_bool()))
     }))
 }
 

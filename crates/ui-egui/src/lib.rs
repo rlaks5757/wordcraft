@@ -121,8 +121,8 @@ pub struct Services {
     /// is always a document to open, whatever its name, and a file the user picks is never one the
     /// parent sent.
     pub host_inbox: Option<Inbox>,
-    /// Web, host mode: the policy groups the parent's last open message switched on. Taken with
-    /// the files in `host_inbox`; empty means no switch changed.
+    /// Web, host mode: the policy of each open message in `host_inbox`, in the same order (one
+    /// per file). A file with none left opens with no switch changed.
     pub host_policy: Option<HostPolicySlot>,
     /// Web: pictures pasted from the browser's clipboard (the bytes; the name is ignored). Kept
     /// apart from `inbox` because a paste only lands in the document when the page is the edit
@@ -227,8 +227,8 @@ pub enum DefaultApp {
 /// Files delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
-/// The policy the parent's open message carries, until the app picks it up.
-pub type HostPolicySlot = std::sync::Arc<std::sync::Mutex<Option<wordcraft_engine::host_policy::HostPolicy>>>;
+/// The policies the parent's open messages carry, oldest first, until the app picks them up.
+pub type HostPolicySlot = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<wordcraft_engine::host_policy::HostPolicy>>>;
 
 /// Whether a pasted picture belongs in the document: the page has keyboard focus, and no
 /// Backstage or dialog is open (#1349). A focused text field (comment, Find box) means the page
@@ -2399,18 +2399,22 @@ impl WordApp {
 
     /// Documents the parent page sent: each opens as a document, like File › Open (a dirty
     /// document asks Save / Don't Save / Cancel first). The name's extension only picks the file
-    /// format, never another kind of import.
+    /// format, never another kind of import. One at a time: while a document waits for the Save
+    /// Changes answer the rest stay in the inbox, and each opens with its own message's policy.
     fn drain_host_inbox(&mut self) {
         let Some(inbox) = self.services.host_inbox.clone() else { return };
-        let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
-        // The policy arrives with the open message; a message without one means no switch changed.
-        if !files.is_empty()
-            && let Some(slot) = &self.services.host_policy
-        {
-            let policy = slot.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap_or_default();
-            self.session.set_host_policy(policy);
-        }
-        for (name, bytes) in files {
+        loop {
+            if self.session.host_open_pending() {
+                return;
+            }
+            let file = {
+                let mut files = inbox.lock().unwrap_or_else(|e| e.into_inner());
+                if files.is_empty() { None } else { Some(files.remove(0)) }
+            };
+            let Some((name, bytes)) = file else { return };
+            // The policy arrives with the open message; a message without one means no switch changed.
+            let policy = self.services.host_policy.as_ref().and_then(|slot| slot.lock().unwrap_or_else(|e| e.into_inner()).pop_front());
+            self.session.set_host_policy(policy.unwrap_or_default());
             // The user's own Open is blocked in host mode; the parent's document is the one open
             // that passes the lock (it stays armed while a Save Changes prompt waits).
             self.session.arm_host_open(&name);
@@ -7388,7 +7392,7 @@ mod tests {
         let refused = |a: &mut WordApp, id: &str| a.run(id, json!({})).err().is_some_and(|e| e.contains("not available in PPM"));
         assert!(refused(&mut a, "file.saveAs") && refused(&mut a, "ui.print") && refused(&mut a, "ui.discord"));
         let on = [("file.print", true), ("file.saveAs", true), ("ui.externalLinks", true), ("format.bold", false), ("file.open", true), ("no.suchCommand", true)];
-        *slot.lock().unwrap() = Some(overrides(&on));
+        slot.lock().unwrap().push_back(overrides(&on));
         host.lock().unwrap().push(("a.txt".into(), b"one".to_vec()));
         a.drain_host_inbox();
         assert!(!refused(&mut a, "file.saveAs") && !refused(&mut a, "ui.print") && !refused(&mut a, "ui.discord"));
@@ -7397,7 +7401,7 @@ mod tests {
         assert!(refused(&mut a, "tools.macros"));
         assert!(refused(&mut a, "format.bold"), "a command the parent turned off is refused");
         // The next document comes with no policy: everything is off again.
-        *slot.lock().unwrap() = Some(HostPolicy::default());
+        slot.lock().unwrap().push_back(HostPolicy::default());
         host.lock().unwrap().push(("b.txt".into(), b"two".to_vec()));
         a.drain_host_inbox();
         assert!(refused(&mut a, "file.saveAs") && refused(&mut a, "ui.print") && !a.links_allowed());
@@ -7422,6 +7426,37 @@ mod tests {
         a.drain_host_inbox();
         a.answer_save_changes(SaveChoice::DontSave).unwrap();
         assert!(body(&a).contains("second"));
+    }
+
+    /// Two documents in a row: the second waits in the inbox while the first waits for the Save
+    /// Changes answer, and each opens with the policy of its own message.
+    #[test]
+    fn host_lock_documents_in_a_row_open_one_at_a_time_with_their_own_policy() {
+        use wordcraft_engine::host_policy::HostPolicy;
+        let mut a = locked_app();
+        a.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        let (host, slot) = (Inbox::default(), HostPolicySlot::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.host_policy = Some(slot.clone());
+        let printing = HostPolicy::new([("file.print".to_string(), true)]);
+        let refused = |a: &mut WordApp, id: &str| a.run(id, json!({})).err().is_some_and(|e| e.contains("not available in PPM"));
+        slot.lock().unwrap().push_back(printing);
+        host.lock().unwrap().push(("one.txt".into(), b"first".to_vec()));
+        slot.lock().unwrap().push_back(HostPolicy::default());
+        host.lock().unwrap().push(("two.txt".into(), b"second".to_vec()));
+        a.drain_host_inbox();
+        assert!(a.dialog.is_some(), "the Save Changes prompt for the first document");
+        assert_eq!(host.lock().unwrap().len(), 1, "the second document waits");
+        assert_eq!(slot.lock().unwrap().len(), 1, "and keeps its own policy");
+        a.drain_host_inbox();
+        assert_eq!(host.lock().unwrap().len(), 1, "still waiting while the prompt is open");
+        a.answer_save_changes(SaveChoice::DontSave).unwrap();
+        assert!(body(&a).contains("first"), "the first document opened, not the second");
+        assert!(!refused(&mut a, "file.print"), "with the first message's policy");
+        a.drain_host_inbox();
+        assert!(body(&a).contains("second"));
+        assert!(host.lock().unwrap().is_empty() && slot.lock().unwrap().is_empty());
+        assert!(refused(&mut a, "file.print"), "with the second message's policy");
     }
 
     /// Host mode: each platform function that reaches the user's machine is closed.

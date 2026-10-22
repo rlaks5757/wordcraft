@@ -44,7 +44,7 @@ const ALLOWED: &[&str] = &[
     "equation.enter", "equation.exit", "equation.gallery", "equation.get", "equation.inputFormat", "equation.insertStructure",
     "equation.insertSymbol", "equation.justify", "equation.move", "equation.normalText", "equation.number", "equation.set", "equation.structure",
     "equation.structureActions", "equation.type", "fields.lock", "fields.next", "fields.previous", "fields.selected", "fields.setCode",
-    "fields.toggleCode", "fields.unlink", "fields.unlock", "file.accessibility", "file.compatibility", "file.encrypt", "file.info", "file.inspect", "file.options",
+    "fields.toggleCode", "fields.unlink", "fields.unlock", "file.accessibility", "file.compatibility", "file.info", "file.inspect", "file.options",
     "file.privacy", "file.privacyOptions", "file.properties", "file.protect", "file.save", "file.setAuthor", "font.add", "font.list", "font.loadSystem", "font.remove",
     "format.allCaps", "format.bold", "format.border", "format.changeCase", "format.charStyle", "format.clear", "format.color",
     "format.doubleStrikethrough", "format.doubleUnderline", "format.emboss", "format.enclose", "format.engrave", "format.font", "format.fontDialog",
@@ -114,6 +114,8 @@ const ALLOWED: &[&str] = &[
     "wordArt.textOutline", "wordArt.transform",
 ];
 
+/// There is no revert command in WordCraft (the registry has none), so none is listed here.
+///
 /// Commands no policy turns on: they open, create, close or replace the document, keep copies of
 /// it, load templates, macros or font files, or open other windows.
 #[rustfmt::skip]
@@ -122,10 +124,12 @@ const LOCKED: &[&str] = &[
     "tools.macros", "tools.recordMacro", "view.newWindow",
 ];
 
-/// Commands that are off until the parent's policy turns them on: printing, Save As and export.
+/// Commands that are off until the parent's policy turns them on: printing, Save As and export,
+/// and password encryption (a password set here is applied by the next plain Save, so an editor
+/// could lock the parent's copy for everyone else).
 #[rustfmt::skip]
 const OFF: &[&str] = &[
-    "file.exportPdf", "file.exportPng", "file.print", "file.printMarkup", "file.printPdf", "file.saveAs", "file.saveTemplate",
+    "file.encrypt", "file.exportPdf", "file.exportPng", "file.print", "file.printMarkup", "file.printPdf", "file.saveAs", "file.saveTemplate",
 ];
 
 /// Whether a command can be turned on or off by the parent's policy.
@@ -157,7 +161,24 @@ pub struct HostPolicy {
     overrides: std::collections::BTreeMap<String, bool>,
 }
 
+/// Most overrides one open message may carry (the contract allows 4000); the first ones that
+/// are valid are kept.
+pub const MAX_OVERRIDES: usize = 4096;
+
 impl HostPolicy {
+    /// The policy of an open message's `policy` field: `{"overrides": {"<id>": bool}}`. Anything
+    /// else (no policy, no overrides, not an object) changes nothing.
+    pub fn from_message(policy: Option<&Value>) -> Self {
+        let Some(map) = policy.and_then(|p| p.get("overrides")).and_then(Value::as_object) else { return Self::default() };
+        Self::from_entries(map.iter().map(|(id, v)| (id.clone(), v.as_bool())))
+    }
+
+    /// The overrides as the parent wrote them (`None` for a value that is not a boolean). Entries
+    /// that are not valid are skipped *before* the limit counts, so junk can't push out a switch.
+    pub fn from_entries(entries: impl IntoIterator<Item = (String, Option<bool>)>) -> Self {
+        Self::new(entries.into_iter().filter_map(|(id, on)| Some((id, on?))).take(MAX_OVERRIDES))
+    }
+
     pub fn new(overrides: impl IntoIterator<Item = (String, bool)>) -> Self {
         Self { overrides: overrides.into_iter().collect() }
     }
@@ -235,6 +256,11 @@ impl Session {
     /// own Open stays blocked. It is used up by that open (or [`Self::disarm_host_open`]).
     pub fn arm_host_open(&mut self, name: &str) {
         self.host_open = Some(name.to_string());
+    }
+
+    /// Whether a parent document is armed and waiting (for a Save Changes answer, say).
+    pub fn host_open_pending(&self) -> bool {
+        self.host_open.is_some()
     }
 
     pub fn disarm_host_open(&mut self) {
@@ -337,10 +363,41 @@ mod tests {
     fn edits_into_the_document_are_allowed() {
         for id in [
             "insert.picture", "insert.textFromFile", "insert.object", "insert.spreadsheet", "picture.change", "font.loadSystem", "font.add", "font.remove", "file.protect", "review.compare",
-            "review.combine", "tools.customizeKeyboard", "tools.customizeRibbon", "developer.picture", "file.encrypt", "tools.attachTemplate", "tools.detachTemplate", "tools.linkStyles", "tools.updateStyles", "tools.templates", "mailings.start", "mailings.finish", "mailings.recipients",
+            "review.combine", "tools.customizeKeyboard", "tools.customizeRibbon", "developer.picture", "tools.attachTemplate", "tools.detachTemplate", "tools.linkStyles", "tools.updateStyles", "tools.templates", "mailings.start", "mailings.finish", "mailings.recipients",
         ] {
             assert!(check(id, &json!({}), &HostPolicy::default()).is_ok(), "{id}");
         }
+    }
+
+    /// The policy of a message is read leniently and capped after the invalid entries are dropped.
+    #[test]
+    fn a_message_policy_is_read_leniently() {
+        let none = HostPolicy::default();
+        for bad in [None, Some(json!(null)), Some(json!([1])), Some(json!({})), Some(json!({"overrides": [true]})), Some(json!({"overrides": "x"})), Some(json!({"allow": ["print"]}))] {
+            assert_eq!(HostPolicy::from_message(bad.as_ref()), none, "{bad:?}");
+        }
+        let p = HostPolicy::from_message(Some(&json!({"overrides": {"file.print": true, "format.bold": false, "format.italic": "no", "file.open": 1}})));
+        assert!(p.command_on("file.print") && !p.command_on("format.bold") && p.command_on("format.italic"), "a non-boolean is skipped");
+        assert!(!p.command_on("file.open"));
+        // 5000 junk entries first do not push out the valid switch after them.
+        let junk = (0..5000).map(|i| (format!("junk{i}"), None));
+        let p = HostPolicy::from_entries(junk.chain([("format.bold".to_string(), Some(false))]));
+        assert!(!p.command_on("format.bold"));
+        let many = (0..MAX_OVERRIDES + 10).map(|i| (format!("id{i}"), Some(true)));
+        assert_eq!(HostPolicy::from_entries(many).overrides.len(), MAX_OVERRIDES);
+    }
+
+    /// Encrypting is off by default: a password set there would be applied by the next plain
+    /// Save and lock the parent's copy; the parent can still turn it on.
+    #[test]
+    fn encrypting_is_off_until_the_parent_turns_it_on() {
+        let mut s = locked();
+        let r = s.run("file.encrypt", &json!({"password": "secret"}));
+        assert!(matches!(r, Err(CmdError::Disabled(_))), "{r:?}");
+        assert!(s.password.is_none());
+        s.set_host_policy(overrides(&[("file.encrypt", true)]));
+        s.run("file.encrypt", &json!({"password": "secret"})).unwrap();
+        assert!(s.password.is_some());
     }
 
     /// Save to another name or format is Save As's: it follows that command's switch.

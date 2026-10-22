@@ -25,7 +25,7 @@ pub fn decide(host_build: bool, bridge: bool) -> Launch {
     match (host_build, bridge) {
         (true, false) => Launch::NeedHost,
         (true, true) => Launch::Start { host: true },
-        (false, bridge) => Launch::Start { host: bridge },
+        (false, _) => Launch::Start { host: false },
     }
 }
 
@@ -43,10 +43,10 @@ mod tests {
         assert_eq!(decide(true, true), Launch::Start { host: true });
     }
 
-    /// The upstream build behaves as before, framed or not.
+    /// The upstream build behaves as before, framed or not: it is never locked.
     #[test]
     fn the_upstream_build_is_unchanged() {
         assert_eq!(decide(false, false), Launch::Start { host: false });
-        assert_eq!(decide(false, true), Launch::Start { host: true });
+        assert_eq!(decide(false, true), Launch::Start { host: false });
     }
 }
