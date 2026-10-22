@@ -48,10 +48,9 @@ fn policy_id(id: &str) -> &str {
 /// Reference-manager commands (`ui.zotero.*`): the desktop app talks to a program on the user's machine.
 const BLOCKED_UI_PREFIXES: &[&str] = &["ui.zotero."];
 
-/// Dialogs behind blocked commands: templates and the Organizer (macros, styles from files), the
-/// password and rename dialogs (they change what the parent receives). `ui.dialog` with one of
-/// these names opens nothing.
-pub const BLOCKED_DIALOGS: &[&str] = &["templates", "organizer", "encryptPassword", "renameDocument"];
+/// Dialogs behind locked commands: the rename dialog (the parent names the document). `ui.dialog`
+/// with one of these names opens nothing.
+pub const BLOCKED_DIALOGS: &[&str] = &["renameDocument"];
 
 /// Whether a host-locked app shows Backstage page `page`: Info, Save and Options always; Print and
 /// Save As / Export only when the policy has the command behind them on.
@@ -180,7 +179,8 @@ mod tests {
         for id in ["ui.openFileDialog", "ui.print", "ui.discord", "ui.startScreen", "ui.zotero.refresh", "ui.somethingNew"] {
             assert!(check_ui(id, &json!({}), off).is_err(), "{id}");
         }
-        assert!(check_ui("ui.dialog", &json!({"name": "templates"}), off).is_err());
+        assert!(check_ui("ui.dialog", &json!({"name": "renameDocument"}), off).is_err());
+        assert!(check_ui("ui.dialog", &json!({"name": "templates"}), off).is_ok(), "styles go into the document");
         assert!(check_ui("ui.dialog", &json!({"name": "font"}), off).is_ok());
         assert!(check_ui("ui.dialog", &json!({"name": "compare"}), off).is_ok(), "compare puts a file into the document");
         assert!(check_ui("ui.changePicture", &json!({}), off).is_ok());

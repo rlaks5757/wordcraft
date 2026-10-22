@@ -7428,21 +7428,21 @@ mod tests {
     #[test]
     fn host_lock_closes_file_dialogs_pickers_and_menu_entries() {
         let mut a = locked_app();
-        for id in ["file.new", "file.open", "file.saveAs", "file.exportPdf", "file.print", "file.rename", "tools.attachTemplate", "tools.macros"] {
+        for id in ["file.new", "file.open", "file.saveAs", "file.exportPdf", "file.print", "file.rename", "tools.recordMacro", "tools.macros"] {
             assert!(a.run(id, json!({})).is_err(), "{id} is refused");
             assert!(a.execute(id, json!({})).is_err(), "{id} is refused by execute");
         }
         for id in ["ui.openFileDialog", "ui.print", "ui.discord", "ui.fileBrowser", "ui.startScreen"] {
             assert!(a.run(id, json!({})).is_err(), "{id} is refused");
         }
-        assert!(a.run("ui.dialog", json!({"name": "templates"})).is_err());
+        assert!(a.run("ui.dialog", json!({"name": "renameDocument"})).is_err());
         assert!(a.run("ui.backstage", json!({"value": true, "page": "open"})).is_err());
         assert!(a.run("ui.backstage", json!({"value": true, "page": "info"})).is_ok());
         assert!(matches!(
             a.ask_file(file_dialogs::FileDialogRequest::Open { purpose: "document".into() }, file_dialogs::AfterPick::OpenDocument),
             file_dialogs::Asked::Done(Err(_))
         ));
-        assert!(dialogs::Dialog::open("templates", &mut a).is_none());
+        assert!(dialogs::Dialog::open("renameDocument", &mut a).is_none());
         assert!(!a.links_allowed(), "links are off without the policy");
         a.open_dialog();
         assert!(!a.file_dialog_open());

@@ -44,7 +44,7 @@ const ALLOWED: &[&str] = &[
     "equation.enter", "equation.exit", "equation.gallery", "equation.get", "equation.inputFormat", "equation.insertStructure",
     "equation.insertSymbol", "equation.justify", "equation.move", "equation.normalText", "equation.number", "equation.set", "equation.structure",
     "equation.structureActions", "equation.type", "fields.lock", "fields.next", "fields.previous", "fields.selected", "fields.setCode",
-    "fields.toggleCode", "fields.unlink", "fields.unlock", "file.accessibility", "file.compatibility", "file.info", "file.inspect", "file.options",
+    "fields.toggleCode", "fields.unlink", "fields.unlock", "file.accessibility", "file.compatibility", "file.encrypt", "file.info", "file.inspect", "file.options",
     "file.privacy", "file.privacyOptions", "file.properties", "file.protect", "file.save", "file.setAuthor", "font.add", "font.list", "font.loadSystem", "font.remove",
     "format.allCaps", "format.bold", "format.border", "format.changeCase", "format.charStyle", "format.clear", "format.color",
     "format.doubleStrikethrough", "format.doubleUnderline", "format.emboss", "format.enclose", "format.engrave", "format.font", "format.fontDialog",
@@ -104,7 +104,8 @@ const ALLOWED: &[&str] = &[
     "table.textDirection", "table.toText", "table.viewGridlines", "text.backTab", "text.backspace", "text.columnBreak", "text.copyright",
     "text.delete", "text.deleteWordBack", "text.deleteWordForward", "text.ellipsis", "text.emDash", "text.insert", "text.lineBreak", "text.nbHyphen",
     "text.nbsp", "text.newParagraph", "text.optionalHyphen", "text.overtype", "text.pageBreak", "text.registered", "text.tab", "text.toggleUnicode",
-    "text.trademark", "text.typeCode", "tools.autocorrect", "tools.customizeKeyboard", "tools.customizeRibbon", "tools.search",
+    "text.trademark", "text.typeCode", "tools.attachTemplate", "tools.autocorrect", "tools.customizeKeyboard", "tools.customizeRibbon", "tools.detachTemplate", "tools.linkStyles", "tools.search",
+    "tools.templates", "tools.updateStyles",
     "view.accessibilityPane", "view.altTextPane", "view.commentsPane", "view.darkMode", "view.draft", "view.fieldCodes", "view.focus",
     "view.fullScreen", "view.gridlines", "view.hideWhiteSpace", "view.immersive", "view.interfaceTheme", "view.marks", "view.multiplePages",
     "view.navigationPane", "view.numeral", "view.onePage", "view.outline", "view.pageWidth", "view.printLayout", "view.readColumnWidth",
@@ -117,9 +118,8 @@ const ALLOWED: &[&str] = &[
 /// it, load templates, macros or font files, or open other windows.
 #[rustfmt::skip]
 const LOCKED: &[&str] = &[
-    "file.autosave", "file.close", "file.encrypt", "file.new", "file.newFromTemplate", "file.open", "file.recover", "file.rename", "file.share",
-    "file.versions", "tools.attachTemplate", "tools.detachTemplate", "tools.linkStyles", "tools.macros",
-    "tools.recordMacro", "tools.templates", "tools.updateStyles", "view.newWindow",
+    "file.autosave", "file.close", "file.new", "file.newFromTemplate", "file.open", "file.recover", "file.rename", "file.share", "file.versions",
+    "tools.macros", "tools.recordMacro", "view.newWindow",
 ];
 
 /// Commands that are off until the parent's policy turns them on: printing, Save As and export.
@@ -322,8 +322,8 @@ mod tests {
         let mut s = locked();
         for id in [
             "file.new", "file.open", "file.saveAs", "file.exportPdf", "file.exportPng", "file.print", "file.printPdf", "file.newFromTemplate", "file.saveTemplate",
-            "file.recover", "file.autosave", "file.close", "file.encrypt", "file.share", "file.rename", "file.versions", "tools.attachTemplate", "tools.macros",
-            "tools.recordMacro", "tools.templates", "view.newWindow",
+            "file.recover", "file.autosave", "file.close", "file.share", "file.rename", "file.versions", "tools.macros",
+            "tools.recordMacro", "view.newWindow",
         ] {
             let before = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
             let r = s.run(id, &json!({"path": "/tmp/x.docx", "data": "AAAA", "text": "x"}));
@@ -337,7 +337,7 @@ mod tests {
     fn edits_into_the_document_are_allowed() {
         for id in [
             "insert.picture", "insert.textFromFile", "insert.object", "insert.spreadsheet", "picture.change", "font.loadSystem", "font.add", "font.remove", "file.protect", "review.compare",
-            "review.combine", "tools.customizeKeyboard", "tools.customizeRibbon", "developer.picture", "mailings.start", "mailings.finish", "mailings.recipients",
+            "review.combine", "tools.customizeKeyboard", "tools.customizeRibbon", "developer.picture", "file.encrypt", "tools.attachTemplate", "tools.detachTemplate", "tools.linkStyles", "tools.updateStyles", "tools.templates", "mailings.start", "mailings.finish", "mailings.recipients",
         ] {
             assert!(check(id, &json!({}), &HostPolicy::default()).is_ok(), "{id}");
         }

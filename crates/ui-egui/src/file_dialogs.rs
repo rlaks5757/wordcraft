@@ -166,9 +166,8 @@ impl WordApp {
             AfterPick::SaveAs { .. } => policy.command_on("file.saveAs"),
             AfterPick::Export { .. } => policy.command_on("file.exportPdf") || policy.command_on("file.exportPng"),
             AfterPick::PrintPdf { .. } => policy.command_on("file.printPdf"),
-            // Templates and the Organizer (ForDialog) bring in macros and styles from files.
-            AfterPick::Font => true,
-            AfterPick::OpenDocument | AfterPick::ForDialog => false,
+            AfterPick::Font | AfterPick::ForDialog => true,
+            AfterPick::OpenDocument => false,
         }
     }
 
