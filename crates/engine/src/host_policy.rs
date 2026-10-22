@@ -2,11 +2,17 @@
 //!
 //! PPM embeds WordCraft in its own page and owns the files: the parent hands the document over and
 //! stores what WordCraft saves. A session locked to its host ([`Session::lock_to_host`]) therefore
-//! runs only the commands in [`ALLOWED`] (default deny): everything that opens, creates, exports,
-//! prints or downloads files, loads templates, macros or fonts from the user's machine, or opens
-//! other windows is refused in [`Session::run`], whichever control (ribbon, shortcut, context
-//! menu, command search, script) asked. A new command that is in none of the three tables fails
-//! `every_command_is_classified`, so nothing becomes available by being forgotten.
+//! runs only the commands in [`ALLOWED`] (default deny): everything that opens or replaces the
+//! document, creates one, exports, prints or downloads it, loads templates, macros or fonts files,
+//! or opens other windows is refused in [`Session::run`], whichever control (ribbon, shortcut,
+//! context menu, command search, script) asked. Edits that put things *into* the open document
+//! (pictures, files to insert or compare, mail merge, protection, system fonts) are allowed.
+//! A new command that is in neither table fails `every_command_is_classified`, so nothing
+//! becomes available by being forgotten.
+//!
+//! The parent may switch some blocked commands back on per document with a [`HostPolicy`] (the
+//! `policy.allow` groups of its open message): print, export and external links. Everything else
+//! in [`BLOCKED`] stays blocked whatever the policy says.
 //!
 //! The lock is one-way: no command clears it. The app turns it on once at startup from a build
 //! switch, so a running page can't be talked out of it.
@@ -26,54 +32,59 @@ const ALLOWED: &[&str] = &[
     "design.effects", "design.pageBorders", "design.pageColor", "design.paragraphSpacing", "design.setDefault", "design.styleSet", "design.theme",
     "design.themeColors", "design.themeFonts", "design.themes", "design.watermark", "developer.buildingBlock", "developer.checkBox",
     "developer.chooseItem", "developer.comboBox", "developer.control", "developer.datePicker", "developer.designMode", "developer.dropDown",
-    "developer.plainText", "developer.properties", "developer.removeControl", "developer.repeatingSection", "developer.richText", "developer.setDate",
-    "developer.toggleCheckBox", "document.inspect", "document.layout", "document.paragraph", "document.selection", "document.setText",
-    "document.text", "draw.addPen", "draw.convertInk", "draw.erase", "draw.eraser", "draw.highlighter", "draw.inkToShape", "draw.lasso",
-    "draw.lassoColor", "draw.lassoDelete", "draw.lassoMove", "draw.pen", "draw.pencil", "draw.removePen", "draw.replay", "draw.select", "draw.stroke",
-    "edit.advancedFind", "edit.clearClipboard", "edit.clipboardItems", "edit.clipboardPane", "edit.copy", "edit.copyFormat", "edit.cut",
-    "edit.deleteClipboardItem", "edit.find", "edit.findNext", "edit.findPrevious", "edit.findReplace", "edit.formatPainter", "edit.goBack",
-    "edit.goto", "edit.insertSpike", "edit.paste", "edit.pasteAllClipboard", "edit.pasteClipboardItem", "edit.pasteFormat", "edit.pasteMerge",
-    "edit.pasteSpecial", "edit.pasteText", "edit.redo", "edit.repeat", "edit.replace", "edit.replaceAll", "edit.spike", "edit.undo",
-    "edit.undoHistory", "edit.undoTo", "equation.backspace", "equation.convert", "equation.delete", "equation.display", "equation.edit",
+    "developer.picture", "developer.plainText", "developer.properties", "developer.removeControl", "developer.repeatingSection", "developer.richText",
+    "developer.setDate", "developer.toggleCheckBox", "document.inspect", "document.layout", "document.paragraph", "document.selection",
+    "document.setText", "document.text", "draw.addPen", "draw.convertInk", "draw.erase", "draw.eraser", "draw.highlighter", "draw.inkToShape",
+    "draw.lasso", "draw.lassoColor", "draw.lassoDelete", "draw.lassoMove", "draw.pen", "draw.pencil", "draw.removePen", "draw.replay", "draw.select",
+    "draw.stroke", "edit.advancedFind", "edit.clearClipboard", "edit.clipboardItems", "edit.clipboardPane", "edit.copy", "edit.copyFormat",
+    "edit.cut", "edit.deleteClipboardItem", "edit.find", "edit.findNext", "edit.findPrevious", "edit.findReplace", "edit.formatPainter",
+    "edit.goBack", "edit.goto", "edit.insertSpike", "edit.paste", "edit.pasteAllClipboard", "edit.pasteClipboardItem", "edit.pasteFormat",
+    "edit.pasteMerge", "edit.pasteSpecial", "edit.pasteText", "edit.redo", "edit.repeat", "edit.replace", "edit.replaceAll", "edit.spike",
+    "edit.undo", "edit.undoHistory", "edit.undoTo", "equation.backspace", "equation.convert", "equation.delete", "equation.display", "equation.edit",
     "equation.enter", "equation.exit", "equation.gallery", "equation.get", "equation.inputFormat", "equation.insertStructure",
     "equation.insertSymbol", "equation.justify", "equation.move", "equation.normalText", "equation.number", "equation.set", "equation.structure",
     "equation.structureActions", "equation.type", "fields.lock", "fields.next", "fields.previous", "fields.selected", "fields.setCode",
     "fields.toggleCode", "fields.unlink", "fields.unlock", "file.accessibility", "file.compatibility", "file.info", "file.inspect", "file.options",
-    "file.privacy", "file.privacyOptions", "file.properties", "file.save", "file.setAuthor", "font.list", "format.allCaps", "format.bold",
-    "format.border", "format.changeCase", "format.charStyle", "format.clear", "format.color", "format.doubleStrikethrough", "format.doubleUnderline",
-    "format.emboss", "format.enclose", "format.engrave", "format.font", "format.fontDialog", "format.growFont", "format.growFont1", "format.hidden",
-    "format.highlight", "format.italic", "format.outline", "format.phonetic", "format.position", "format.resetChar", "format.scale", "format.set",
-    "format.shading", "format.shadow", "format.shrinkFont", "format.shrinkFont1", "format.size", "format.smallCaps", "format.spacing", "format.state",
-    "format.strikethrough", "format.subscript", "format.superscript", "format.textEffects", "format.underline", "format.wordUnderline", "hf.next",
-    "hf.position", "hf.previous", "insert.autoText", "insert.blankPage", "insert.bookmark", "insert.canvas", "insert.chart", "insert.closeHeader",
-    "insert.coverPage", "insert.createFooter", "insert.createHeader", "insert.crossReference", "insert.dateField", "insert.dateTime",
-    "insert.deleteBookmark", "insert.docProperty", "insert.dropCap", "insert.editFooter", "insert.editHeader", "insert.equation", "insert.field",
-    "insert.footer", "insert.header", "insert.horizontalLine", "insert.icon", "insert.link", "insert.pageBreak", "insert.pageField",
-    "insert.pageNumber", "insert.quickParts", "insert.removeEmptyHeaders", "insert.removeFooter", "insert.removeHeader", "insert.removeLink",
-    "insert.shape", "insert.signatureLine", "insert.smartArt", "insert.symbol", "insert.table", "insert.textBox", "insert.timeField",
+    "file.privacy", "file.privacyOptions", "file.properties", "file.protect", "file.save", "file.setAuthor", "font.list", "font.loadSystem",
+    "format.allCaps", "format.bold", "format.border", "format.changeCase", "format.charStyle", "format.clear", "format.color",
+    "format.doubleStrikethrough", "format.doubleUnderline", "format.emboss", "format.enclose", "format.engrave", "format.font", "format.fontDialog",
+    "format.growFont", "format.growFont1", "format.hidden", "format.highlight", "format.italic", "format.outline", "format.phonetic",
+    "format.position", "format.resetChar", "format.scale", "format.set", "format.shading", "format.shadow", "format.shrinkFont", "format.shrinkFont1",
+    "format.size", "format.smallCaps", "format.spacing", "format.state", "format.strikethrough", "format.subscript", "format.superscript",
+    "format.textEffects", "format.underline", "format.wordUnderline", "hf.next", "hf.position", "hf.previous", "insert.autoText", "insert.blankPage",
+    "insert.bookmark", "insert.canvas", "insert.chart", "insert.closeHeader", "insert.coverPage", "insert.createFooter", "insert.createHeader",
+    "insert.crossReference", "insert.dateField", "insert.dateTime", "insert.deleteBookmark", "insert.docProperty", "insert.dropCap",
+    "insert.editFooter", "insert.editHeader", "insert.equation", "insert.field", "insert.footer", "insert.header", "insert.horizontalLine",
+    "insert.icon", "insert.link", "insert.object", "insert.pageBreak", "insert.pageField", "insert.pageNumber", "insert.picture", "insert.quickParts",
+    "insert.removeEmptyHeaders", "insert.removeFooter", "insert.removeHeader", "insert.removeLink", "insert.shape", "insert.signatureLine",
+    "insert.smartArt", "insert.spreadsheet", "insert.symbol", "insert.table", "insert.textBox", "insert.textFromFile", "insert.timeField",
     "insert.wordArt", "layout.break", "layout.columns", "layout.differentFirstPage", "layout.differentOddEven", "layout.documentGrid",
     "layout.hyphenation", "layout.lineNumbers", "layout.linkToPrevious", "layout.manualHyphenation", "layout.margins", "layout.orientation",
     "layout.pageNumberFormat", "layout.pageSetup", "layout.section", "layout.sectionRtl", "layout.size", "layout.textDirection",
-    "layout.verticalAlign", "link.targets", "list.define", "list.get", "list.multilevelPreset", "object.altText", "outline.close", "outline.collapse",
-    "outline.demote", "outline.demoteToBody", "outline.expand", "outline.firstLineOnly", "outline.level", "outline.moveDown", "outline.moveUp",
-    "outline.promote", "outline.promoteToHeading1", "outline.selectSubtree", "outline.showAll", "outline.showFormatting", "outline.showLevel",
-    "outline.showLevel1", "outline.showLevel2", "outline.showLevel3", "outline.showLevel4", "outline.showLevel5", "outline.showLevel6",
-    "outline.showLevel7", "outline.showLevel8", "outline.showLevel9", "outline.state", "outline.toggle", "para.addSpaceBefore", "para.align",
-    "para.alignCenter", "para.alignLeft", "para.alignRight", "para.asianTypography", "para.borders", "para.bullets", "para.defineBullet",
-    "para.defineNumber", "para.demote", "para.dialog", "para.distribute", "para.double", "para.hangingIndent", "para.heading1", "para.heading2",
-    "para.heading3", "para.indent", "para.indents", "para.justify", "para.keepLines", "para.keepNext", "para.lineSpacing", "para.listLevel",
-    "para.ltr", "para.moveDown", "para.moveUp", "para.multilevel", "para.normal", "para.numbering", "para.oneAndHalf", "para.outdent",
-    "para.outlineLevel", "para.pageBreakBefore", "para.promote", "para.removeHanging", "para.removeSpaceAfter", "para.reset", "para.restartNumbering",
-    "para.rtl", "para.set", "para.setNumberingValue", "para.shading", "para.single", "para.sort", "para.spacing", "para.style", "para.tabs",
-    "para.widowControl", "picture.altText", "picture.border", "picture.color", "picture.compress", "picture.corrections", "picture.crop",
-    "picture.effects", "picture.iconColor", "picture.removeBackground", "picture.reset", "picture.size", "picture.style", "picture.transparency",
-    "readAloud.next", "readAloud.playPause", "readAloud.previous", "readAloud.skipCitations", "readAloud.speed", "readAloud.status", "readAloud.stop",
-    "references.addText", "references.bibliography", "references.caption", "references.citation", "references.citationStyle",
-    "references.convertNotes", "references.endnote", "references.footnote", "references.index", "references.markCitation", "references.markEntry",
-    "references.nextFootnote", "references.noteOptions", "references.notes", "references.removeToc", "references.researcher", "references.sources",
-    "references.tableOfAuthorities", "references.tableOfFigures", "references.toc", "references.updateAuthorities", "references.updateFields",
-    "references.updateFigures", "references.updateIndex", "references.updateToc", "review.accept", "review.acceptAll", "review.addToDictionary",
-    "review.applySuggestion", "review.changes", "review.comments", "review.deleteComment", "review.editComment", "review.editor", "review.hideInk",
+    "layout.verticalAlign", "link.targets", "list.define", "list.get", "list.multilevelPreset", "mailings.addressBlock", "mailings.checkErrors",
+    "mailings.editRecipients", "mailings.envelopes", "mailings.filterRecipients", "mailings.findRecipient", "mailings.finish",
+    "mailings.greetingLine", "mailings.highlightFields", "mailings.insertField", "mailings.labels", "mailings.matchFields", "mailings.next",
+    "mailings.preview", "mailings.previous", "mailings.recipients", "mailings.rules", "mailings.sortRecipients", "mailings.start", "object.altText",
+    "outline.close", "outline.collapse", "outline.demote", "outline.demoteToBody", "outline.expand", "outline.firstLineOnly", "outline.level",
+    "outline.moveDown", "outline.moveUp", "outline.promote", "outline.promoteToHeading1", "outline.selectSubtree", "outline.showAll",
+    "outline.showFormatting", "outline.showLevel", "outline.showLevel1", "outline.showLevel2", "outline.showLevel3", "outline.showLevel4",
+    "outline.showLevel5", "outline.showLevel6", "outline.showLevel7", "outline.showLevel8", "outline.showLevel9", "outline.state", "outline.toggle",
+    "para.addSpaceBefore", "para.align", "para.alignCenter", "para.alignLeft", "para.alignRight", "para.asianTypography", "para.borders",
+    "para.bullets", "para.defineBullet", "para.defineNumber", "para.demote", "para.dialog", "para.distribute", "para.double", "para.hangingIndent",
+    "para.heading1", "para.heading2", "para.heading3", "para.indent", "para.indents", "para.justify", "para.keepLines", "para.keepNext",
+    "para.lineSpacing", "para.listLevel", "para.ltr", "para.moveDown", "para.moveUp", "para.multilevel", "para.normal", "para.numbering",
+    "para.oneAndHalf", "para.outdent", "para.outlineLevel", "para.pageBreakBefore", "para.promote", "para.removeHanging", "para.removeSpaceAfter",
+    "para.reset", "para.restartNumbering", "para.rtl", "para.set", "para.setNumberingValue", "para.shading", "para.single", "para.sort",
+    "para.spacing", "para.style", "para.tabs", "para.widowControl", "picture.altText", "picture.border", "picture.change", "picture.color",
+    "picture.compress", "picture.corrections", "picture.crop", "picture.effects", "picture.iconColor", "picture.removeBackground", "picture.reset",
+    "picture.size", "picture.style", "picture.transparency", "readAloud.next", "readAloud.playPause", "readAloud.previous", "readAloud.skipCitations",
+    "readAloud.speed", "readAloud.status", "readAloud.stop", "references.addText", "references.bibliography", "references.caption",
+    "references.citation", "references.citationStyle", "references.convertNotes", "references.endnote", "references.footnote", "references.index",
+    "references.markCitation", "references.markEntry", "references.nextFootnote", "references.noteOptions", "references.notes",
+    "references.removeToc", "references.researcher", "references.sources", "references.tableOfAuthorities", "references.tableOfFigures",
+    "references.toc", "references.updateAuthorities", "references.updateFields", "references.updateFigures", "references.updateIndex",
+    "references.updateToc", "review.accept", "review.acceptAll", "review.addToDictionary", "review.applySuggestion", "review.changes",
+    "review.combine", "review.comments", "review.compare", "review.deleteComment", "review.editComment", "review.editor", "review.hideInk",
     "review.ignoreAll", "review.issues", "review.language", "review.markup", "review.newComment", "review.nextChange", "review.nextComment",
     "review.previousChange", "review.previousComment", "review.proofing", "review.readAloud", "review.reject", "review.rejectAll", "review.reply",
     "review.resolveComment", "review.restrict", "review.showMarkup", "review.spelling", "review.suggestions", "review.thesaurus",
@@ -93,40 +104,56 @@ const ALLOWED: &[&str] = &[
     "table.textDirection", "table.toText", "table.viewGridlines", "text.backTab", "text.backspace", "text.columnBreak", "text.copyright",
     "text.delete", "text.deleteWordBack", "text.deleteWordForward", "text.ellipsis", "text.emDash", "text.insert", "text.lineBreak", "text.nbHyphen",
     "text.nbsp", "text.newParagraph", "text.optionalHyphen", "text.overtype", "text.pageBreak", "text.registered", "text.tab", "text.toggleUnicode",
-    "text.trademark", "text.typeCode", "tools.autocorrect", "tools.search", "view.accessibilityPane", "view.altTextPane", "view.commentsPane",
-    "view.darkMode", "view.draft", "view.fieldCodes", "view.focus", "view.fullScreen", "view.gridlines", "view.hideWhiteSpace", "view.immersive",
-    "view.interfaceTheme", "view.marks", "view.multiplePages", "view.navigationPane", "view.numeral", "view.onePage", "view.outline",
-    "view.pageWidth", "view.printLayout", "view.readColumnWidth", "view.readLineSpacing", "view.readMode", "view.readTextSize", "view.ruler",
-    "view.sideToSide", "view.split", "view.state", "view.stylesPane", "view.vertical", "view.webLayout", "view.zoom", "view.zoom100", "view.zoomIn",
-    "view.zoomOut", "wordArt.style", "wordArt.textFill", "wordArt.textOutline", "wordArt.transform",
+    "text.trademark", "text.typeCode", "tools.autocorrect", "tools.customizeKeyboard", "tools.customizeRibbon", "tools.search",
+    "view.accessibilityPane", "view.altTextPane", "view.commentsPane", "view.darkMode", "view.draft", "view.fieldCodes", "view.focus",
+    "view.fullScreen", "view.gridlines", "view.hideWhiteSpace", "view.immersive", "view.interfaceTheme", "view.marks", "view.multiplePages",
+    "view.navigationPane", "view.numeral", "view.onePage", "view.outline", "view.pageWidth", "view.printLayout", "view.readColumnWidth",
+    "view.readLineSpacing", "view.readMode", "view.readTextSize", "view.ruler", "view.sideToSide", "view.split", "view.state", "view.stylesPane",
+    "view.vertical", "view.webLayout", "view.zoom", "view.zoom100", "view.zoomIn", "view.zoomOut", "wordArt.style", "wordArt.textFill",
+    "wordArt.textOutline", "wordArt.transform",
 ];
 
 /// Commands a host-locked session refuses: they reach files, printing, exports, templates, macros, fonts or other windows.
 #[rustfmt::skip]
 const BLOCKED: &[&str] = &[
     "file.autosave", "file.close", "file.encrypt", "file.exportPdf", "file.exportPng", "file.new", "file.newFromTemplate", "file.open", "file.print",
-    "file.printMarkup", "file.printPdf", "file.recover", "file.saveAs", "file.saveTemplate", "file.share", "font.add", "font.loadSystem",
-    "font.remove", "insert.object", "insert.picture", "insert.textFromFile", "picture.change", "tools.attachTemplate", "tools.detachTemplate",
-    "tools.linkStyles", "tools.macros", "tools.recordMacro", "tools.templates", "tools.updateStyles", "view.newWindow",
+    "file.printMarkup", "file.printPdf", "file.recover", "file.rename", "file.saveAs", "file.saveTemplate", "file.share", "file.versions", "font.add",
+    "font.remove", "tools.attachTemplate", "tools.detachTemplate", "tools.linkStyles", "tools.macros", "tools.recordMacro", "tools.templates",
+    "tools.updateStyles", "view.newWindow",
 ];
 
-/// Commands nobody has decided on yet ("판단 필요"). Refused like [`BLOCKED`] until someone moves them.
-#[rustfmt::skip]
-const UNDECIDED: &[&str] = &[
-    "developer.picture", "file.protect", "file.rename", "file.versions", "insert.spreadsheet", "mailings.addressBlock", "mailings.checkErrors",
-    "mailings.editRecipients", "mailings.envelopes", "mailings.filterRecipients", "mailings.findRecipient", "mailings.finish",
-    "mailings.greetingLine", "mailings.highlightFields", "mailings.insertField", "mailings.labels", "mailings.matchFields", "mailings.next",
-    "mailings.preview", "mailings.previous", "mailings.recipients", "mailings.rules", "mailings.sortRecipients", "mailings.start", "review.combine",
-    "review.compare", "tools.customizeKeyboard", "tools.customizeRibbon",
-];
+/// The groups the parent's `policy.allow` can switch on (everything else stays blocked).
+pub const POLICY_GROUPS: [&str; 3] = ["print", "export", "external_links"];
+
+/// Blocked commands the `print` group switches on.
+const PRINT_COMMANDS: &[&str] = &["file.print", "file.printMarkup", "file.printPdf"];
+
+/// Blocked commands the `export` group switches on (Save As, export, download).
+const EXPORT_COMMANDS: &[&str] = &["file.exportPdf", "file.exportPng", "file.saveAs", "file.saveTemplate"];
+
+/// Which policy groups the parent switched on. The default (also what a missing or malformed
+/// policy means) has every group off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HostPolicy {
+    pub print: bool,
+    pub export: bool,
+    pub external_links: bool,
+}
+
+impl HostPolicy {
+    /// The policy for these group ids; unknown ids are ignored.
+    pub fn from_groups<S: AsRef<str>>(allow: &[S]) -> Self {
+        let has = |g: &str| allow.iter().any(|a| a.as_ref() == g);
+        Self { print: has("print"), export: has("export"), external_links: has("external_links") }
+    }
+}
 
 /// How the lock treats a command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {
     Allowed,
     Blocked,
-    Undecided,
-    /// In no table: refused, and `every_command_is_classified` fails until it is added.
+    /// In neither table: refused, and `every_command_is_classified` fails until it is added.
     Unclassified,
 }
 
@@ -136,23 +163,26 @@ pub fn classify(id: &str) -> Class {
         Class::Allowed
     } else if BLOCKED.contains(&id) {
         Class::Blocked
-    } else if UNDECIDED.contains(&id) {
-        Class::Undecided
     } else {
         Class::Unclassified
     }
 }
 
 /// `file.save` params that change what the parent receives: another name or format, or a password.
+/// Allowed only with the `export` group.
 const SAVE_PARAMS_REFUSED: [&str; 3] = ["path", "password", "format"];
 
-/// `Err` says why a locked session refuses `id` with `params`. Only [`Class::Allowed`] commands
-/// pass, and Save only as the plain save the parent stores.
-pub fn check(id: &str, params: &Value) -> Result<(), String> {
-    if classify(id) != Class::Allowed {
-        return Err(format!("{id}: not available in PPM"));
+/// `Err` says why a locked session refuses `id` with `params` under `policy`. [`Class::Allowed`]
+/// commands pass (Save only as the plain save the parent stores, unless exporting is on), and a
+/// blocked command passes only when its policy group is on.
+pub fn check(id: &str, params: &Value, policy: HostPolicy) -> Result<(), String> {
+    match classify(id) {
+        Class::Allowed => {}
+        Class::Blocked if (policy.print && PRINT_COMMANDS.contains(&id)) || (policy.export && EXPORT_COMMANDS.contains(&id)) => {}
+        _ => return Err(format!("{id}: not available in PPM")),
     }
     if id == "file.save"
+        && !policy.export
         && let Some(p) = params.as_object()
         && SAVE_PARAMS_REFUSED.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()))
     {
@@ -169,6 +199,15 @@ impl Session {
 
     pub fn is_host_locked(&self) -> bool {
         self.host_lock
+    }
+
+    /// Set which policy groups the parent switched on (each open message sends its own).
+    pub fn set_host_policy(&mut self, policy: HostPolicy) {
+        self.host_policy = policy;
+    }
+
+    pub fn host_policy(&self) -> HostPolicy {
+        self.host_policy
     }
 
     /// Let the next `file.open` of exactly this document name (with bytes) through the lock: the
@@ -190,7 +229,7 @@ impl Session {
         let armed = id == "file.open"
             && self.host_open.as_deref().is_some_and(|n| params.get("path").and_then(Value::as_str) == Some(n))
             && params.get("data").is_some_and(Value::is_string);
-        if armed { Ok(()) } else { check(id, params) }
+        if armed { Ok(()) } else { check(id, params, self.host_policy) }
     }
 
     /// [`Self::host_check`] as the error [`Session::run`] returns; uses up an armed open.
@@ -222,25 +261,37 @@ mod tests {
         let registry = crate::cmd::registry();
         let ids: Vec<&str> = registry.all().iter().map(|c| c.id).collect();
         let unclassified: Vec<&&str> = ids.iter().filter(|id| classify(id) == Class::Unclassified).collect();
-        assert!(unclassified.is_empty(), "classify these in host_policy.rs (ALLOWED / BLOCKED / UNDECIDED): {unclassified:?}");
-        for (name, table) in [("ALLOWED", ALLOWED), ("BLOCKED", BLOCKED), ("UNDECIDED", UNDECIDED)] {
+        assert!(unclassified.is_empty(), "classify these in host_policy.rs (ALLOWED / BLOCKED): {unclassified:?}");
+        for (name, table) in [("ALLOWED", ALLOWED), ("BLOCKED", BLOCKED)] {
             let gone: Vec<&&str> = table.iter().filter(|id| !ids.contains(id)).collect();
             assert!(gone.is_empty(), "{name} lists commands that no longer exist: {gone:?}");
         }
         let mut seen = std::collections::BTreeSet::new();
-        for id in ALLOWED.iter().chain(BLOCKED).chain(UNDECIDED) {
+        for id in ALLOWED.iter().chain(BLOCKED) {
             assert!(seen.insert(*id), "{id} is in two tables or twice in one");
         }
     }
 
-    /// Everything that reaches the user's files, printers, templates, macros or fonts is refused.
+    /// Drift for the policy groups: a command a group switches on is blocked, in one group only.
+    #[test]
+    fn policy_groups_only_switch_on_blocked_commands_once() {
+        for id in PRINT_COMMANDS.iter().chain(EXPORT_COMMANDS) {
+            assert_eq!(classify(id), Class::Blocked, "{id} is in a group but not blocked");
+        }
+        for id in PRINT_COMMANDS {
+            assert!(!EXPORT_COMMANDS.contains(id), "{id} is in two groups");
+        }
+    }
+
+    /// Everything that opens, replaces, exports or prints the document, or loads templates,
+    /// macros or font files, is refused with no policy.
     #[test]
     fn file_and_platform_commands_are_refused() {
         let mut s = locked();
         for id in [
             "file.new", "file.open", "file.saveAs", "file.exportPdf", "file.exportPng", "file.print", "file.printPdf", "file.newFromTemplate", "file.saveTemplate",
-            "file.recover", "file.autosave", "file.close", "file.encrypt", "file.share", "insert.picture", "insert.textFromFile", "insert.object",
-            "picture.change", "tools.attachTemplate", "tools.macros", "tools.recordMacro", "tools.templates", "font.add", "font.loadSystem", "view.newWindow",
+            "file.recover", "file.autosave", "file.close", "file.encrypt", "file.share", "file.rename", "file.versions", "tools.attachTemplate", "tools.macros",
+            "tools.recordMacro", "tools.templates", "font.add", "view.newWindow",
         ] {
             let before = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
             let r = s.run(id, &json!({"path": "/tmp/x.docx", "data": "AAAA", "text": "x"}));
@@ -249,13 +300,39 @@ mod tests {
         }
     }
 
-    /// Mail merge, compare and the other undecided commands are refused until someone decides.
+    /// Edits that put things into the open document are not refused by the lock.
     #[test]
-    fn undecided_commands_are_refused() {
-        let mut s = locked();
-        for id in UNDECIDED {
-            assert!(matches!(s.run(id, &json!({})), Err(CmdError::Disabled(_))), "{id}");
+    fn edits_into_the_document_are_allowed() {
+        for id in [
+            "insert.picture", "insert.textFromFile", "insert.object", "insert.spreadsheet", "picture.change", "font.loadSystem", "file.protect", "review.compare",
+            "review.combine", "tools.customizeKeyboard", "tools.customizeRibbon", "developer.picture", "mailings.start", "mailings.finish", "mailings.recipients",
+        ] {
+            assert!(check(id, &json!({}), HostPolicy::default()).is_ok(), "{id}");
         }
+    }
+
+    /// Each policy group switches on its own commands and nothing else.
+    #[test]
+    fn policy_groups_switch_on_their_own_commands() {
+        let none = HostPolicy::default();
+        assert_eq!(HostPolicy::from_groups::<&str>(&[]), none);
+        assert_eq!(HostPolicy::from_groups(&["nope", "macros"]), none, "unknown ids are ignored");
+        let print = HostPolicy::from_groups(&["print"]);
+        let export = HostPolicy::from_groups(&["export", "bogus"]);
+        for id in PRINT_COMMANDS {
+            assert!(check(id, &json!({}), none).is_err() && check(id, &json!({}), print).is_ok() && check(id, &json!({}), export).is_err(), "{id}");
+        }
+        for id in EXPORT_COMMANDS {
+            assert!(check(id, &json!({}), none).is_err() && check(id, &json!({}), export).is_ok() && check(id, &json!({}), print).is_err(), "{id}");
+        }
+        // Whatever the policy, these stay blocked.
+        let all = HostPolicy::from_groups(&POLICY_GROUPS);
+        for id in ["file.open", "file.new", "file.close", "file.recover", "file.autosave", "tools.macros", "tools.recordMacro", "file.newFromTemplate"] {
+            assert!(check(id, &json!({}), all).is_err(), "{id}");
+        }
+        // Save As to another name is the export group's.
+        assert!(check("file.save", &json!({"path": "other.pdf"}), none).is_err());
+        assert!(check("file.save", &json!({"path": "other.pdf"}), export).is_ok());
     }
 
     /// Editing and saving still work, and an unlocked session is untouched.
@@ -265,11 +342,12 @@ mod tests {
         s.run("text.insert", &json!({"text": "hello"})).unwrap();
         assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "hello");
         s.run("format.bold", &json!({})).unwrap();
-        assert!(check("file.save", &json!({})).is_ok());
-        assert!(check("file.save", &json!({"path": null})).is_ok());
-        assert!(check("file.save", &json!({"path": "other.pdf"})).is_err(), "Save keeps the parent's name");
-        assert!(check("file.save", &json!({"password": "x"})).is_err());
-        assert!(check("file.save", &json!({"format": "flatopc"})).is_err());
+        let off = HostPolicy::default();
+        assert!(check("file.save", &json!({}), off).is_ok());
+        assert!(check("file.save", &json!({"path": null}), off).is_ok());
+        assert!(check("file.save", &json!({"path": "other.pdf"}), off).is_err(), "Save keeps the parent's name");
+        assert!(check("file.save", &json!({"password": "x"}), off).is_err());
+        assert!(check("file.save", &json!({"format": "flatopc"}), off).is_err());
         let mut open = Session::new(wordcraft_doc::Document::new());
         assert!(open.run("file.new", &json!({})).is_ok(), "no lock, no refusal");
     }

@@ -130,9 +130,11 @@ impl WordApp {
     /// Ask the host for a file and do `after` with the answer: now for a blocking dialog, on a
     /// later frame for an asynchronous one. Ignored while another dialog is open.
     pub(crate) fn ask_file(&mut self, req: FileDialogRequest, after: AfterPick) -> Asked {
-        // Host mode: the parent page owns the files; no picker, native dialog or file browser opens.
-        if self.host_locked() {
-            return Asked::Done(Err("file dialogs are not available in PPM".into()));
+        // Host mode: the parent owns the document. A picker may fetch a file to put into it (a
+        // picture, recipients, a document to compare), but not open or replace the document, and
+        // saving or printing to a file needs the parent's policy.
+        if self.host_locked() && !self.host_allows_pick(&after) {
+            return Asked::Done(Err("this file dialog is not available in PPM".into()));
         }
         if self.file_dialog_open() {
             log::debug!("file dialog already open; ignoring {req:?}");
@@ -152,6 +154,20 @@ impl WordApp {
             FileDialogRequest::Save { name } => self.services.pick_save.as_ref().and_then(|f| f(name)),
         };
         Asked::Done(self.finish_pick(after, picked))
+    }
+
+    /// Whether a host-locked app may show a dialog for `after`.
+    fn host_allows_pick(&self, after: &AfterPick) -> bool {
+        let policy = self.session.host_policy();
+        match after {
+            AfterPick::Picture | AfterPick::Recipients | AfterPick::ComparePath { .. } => true,
+            #[cfg(not(target_arch = "wasm32"))]
+            AfterPick::Sources => true,
+            AfterPick::SaveAs { .. } | AfterPick::Export { .. } => policy.export,
+            AfterPick::PrintPdf { .. } => policy.print,
+            // Templates and the Organizer (ForDialog) bring in macros and styles from files.
+            AfterPick::OpenDocument | AfterPick::Font | AfterPick::ForDialog => false,
+        }
     }
 
     /// Pick up the answer of an open file dialog, if it has arrived (every frame, from `logic`),
@@ -388,9 +404,6 @@ impl WordApp {
     }
 
     pub(crate) fn pick_picture(&mut self) {
-        if self.host_locked() {
-            return;
-        }
         if let Some(f) = &self.services.open_async {
             f("picture");
             return;
@@ -412,9 +425,6 @@ impl WordApp {
 
     /// Request loading local system installed fonts (web: queryLocalFonts).
     pub(crate) fn load_system_fonts(&mut self) {
-        if self.host_locked() {
-            return;
-        }
         if let Some(f) = &self.services.load_system_fonts {
             f();
         } else {

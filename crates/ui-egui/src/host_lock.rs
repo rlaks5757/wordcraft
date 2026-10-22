@@ -10,36 +10,48 @@
 //! `every_ui_command_is_classified`.
 
 use serde_json::Value;
+use wordcraft_engine::host_policy::HostPolicy;
 
 /// Interface commands a host-locked app runs.
 #[rustfmt::skip]
 const ALLOWED_UI: &[&str] = &[
-    "ui.alignmentGuides", "ui.animations", "ui.backstage", "ui.caretAnimation", "ui.click", "ui.clickText", "ui.closeDialog", "ui.collapseRibbon", "ui.contextMenu",
+    "ui.alignmentGuides", "ui.animations", "ui.backstage", "ui.caretAnimation", "ui.changePicture", "ui.click", "ui.clickText", "ui.closeDialog", "ui.collapseRibbon", "ui.contextMenu",
     "ui.crop", "ui.dark", "ui.dialog", "ui.drag", "ui.focus", "ui.inspect", "ui.interfaceSize", "ui.key", "ui.keytips", "ui.language", "ui.linkTextBox", "ui.move",
-    "ui.parity", "ui.press", "ui.quickAccessToolbar", "ui.release", "ui.render", "ui.resize", "ui.saveChanges", "ui.screenshot", "ui.tab", "ui.text", "ui.theme",
+    "ui.openRecipientList", "ui.parity", "ui.press", "ui.quickAccessToolbar", "ui.release", "ui.render", "ui.resize", "ui.saveChanges", "ui.screenshot", "ui.tab", "ui.text", "ui.theme",
     "ui.unlistedCommand", "ui.wheel",
 ];
 
-/// Interface commands a host-locked app refuses: they pick or open files, print, recover files, or reach outside.
+/// Interface commands a host-locked app refuses: they open documents, print, recover files, or reach outside.
 #[rustfmt::skip]
 const BLOCKED_UI: &[&str] = &[
-    "ui.changePicture", "ui.discord", "ui.fileBrowser", "ui.makeDefaultApp", "ui.openFileDialog", "ui.openRecipientList", "ui.print", "ui.printSettings",
-    "ui.printSubmit", "ui.recoveryDiscard", "ui.startScreen",
+    "ui.discord", "ui.fileBrowser", "ui.makeDefaultApp", "ui.openFileDialog", "ui.print", "ui.printSettings", "ui.printSubmit", "ui.recoveryDiscard",
+    "ui.startScreen",
 ];
+
+/// Blocked interface commands the policy's `print` group switches on.
+const PRINT_UI: &[&str] = &["ui.print", "ui.printSettings", "ui.printSubmit"];
+
+/// Blocked interface commands the policy's `external_links` group switches on.
+const LINK_UI: &[&str] = &["ui.discord"];
 
 /// Reference-manager commands (`ui.zotero.*`): the desktop app talks to a program on the user's machine.
 const BLOCKED_UI_PREFIXES: &[&str] = &["ui.zotero."];
 
-/// Dialogs that exist only to pick files, templates, macros or mail-merge data, or to change what
-/// the parent receives (`ui.dialog` with one of these names opens nothing).
-#[rustfmt::skip]
-pub const BLOCKED_DIALOGS: &[&str] = &[
-    "templates", "organizer", "customizeKeyboard", "customizeRibbon", "customizeQuickAccess", "recipientList", "newRecipientList", "insertMergeField", "findRecipient",
-    "ruleIf", "ruleSkipIf", "matchFields", "checkErrors", "compare", "combine", "encryptPassword", "renameDocument", "envelopes", "labels", "mailMerge",
-];
+/// Dialogs behind blocked commands: templates and the Organizer (macros, styles from files), the
+/// password and rename dialogs (they change what the parent receives). `ui.dialog` with one of
+/// these names opens nothing.
+pub const BLOCKED_DIALOGS: &[&str] = &["templates", "organizer", "encryptPassword", "renameDocument"];
 
-/// Backstage (File tab) pages a host-locked app shows; the rest open, create, export or print.
-pub const BACKSTAGE_PAGES: &[&str] = &["info", "save", "options"];
+/// Whether a host-locked app shows Backstage page `page`: Info, Save and Options always; Print
+/// and Save As / Export only with the policy groups that allow them.
+pub fn backstage_page_allowed(page: &str, policy: HostPolicy) -> bool {
+    match page {
+        "info" | "save" | "options" => true,
+        "print" => policy.print,
+        "saveAs" | "export" => policy.export,
+        _ => false,
+    }
+}
 
 /// Options panes a host-locked app hides (they set AutoSave, recent files and agent control).
 pub const HIDDEN_OPTIONS_PANES: &[&str] = &["save", "agents"];
@@ -63,8 +75,9 @@ pub fn classify(id: &str) -> Class {
 }
 
 /// `Err` says why a locked app refuses the `ui.*` command `id` with `params`.
-pub fn check_ui(id: &str, params: &Value) -> Result<(), String> {
-    if classify(id) != Class::Allowed {
+pub fn check_ui(id: &str, params: &Value, policy: HostPolicy) -> Result<(), String> {
+    let switched_on = (policy.print && PRINT_UI.contains(&id)) || (policy.external_links && LINK_UI.contains(&id));
+    if classify(id) != Class::Allowed && !(classify(id) == Class::Blocked && switched_on) {
         return Err(format!("{id}: not available in PPM"));
     }
     let name = params.get("name").and_then(Value::as_str);
@@ -73,7 +86,7 @@ pub fn check_ui(id: &str, params: &Value) -> Result<(), String> {
     }
     if id == "ui.backstage"
         && let Some(page) = params.get("page").and_then(Value::as_str)
-        && !BACKSTAGE_PAGES.contains(&page)
+        && !backstage_page_allowed(page, policy)
     {
         return Err(format!("the {page} page is not available in PPM"));
     }
@@ -120,13 +133,34 @@ mod tests {
 
     #[test]
     fn blocked_ui_commands_and_dialogs_are_refused() {
+        let off = HostPolicy::default();
         for id in ["ui.openFileDialog", "ui.print", "ui.discord", "ui.startScreen", "ui.zotero.refresh", "ui.somethingNew"] {
-            assert!(check_ui(id, &json!({})).is_err(), "{id}");
+            assert!(check_ui(id, &json!({}), off).is_err(), "{id}");
         }
-        assert!(check_ui("ui.dialog", &json!({"name": "templates"})).is_err());
-        assert!(check_ui("ui.dialog", &json!({"name": "font"})).is_ok());
-        assert!(check_ui("ui.backstage", &json!({"page": "open"})).is_err());
-        assert!(check_ui("ui.backstage", &json!({"page": "info"})).is_ok());
-        assert!(check_ui("ui.backstage", &json!({"value": false})).is_ok());
+        assert!(check_ui("ui.dialog", &json!({"name": "templates"}), off).is_err());
+        assert!(check_ui("ui.dialog", &json!({"name": "font"}), off).is_ok());
+        assert!(check_ui("ui.dialog", &json!({"name": "compare"}), off).is_ok(), "compare puts a file into the document");
+        assert!(check_ui("ui.changePicture", &json!({}), off).is_ok());
+        assert!(check_ui("ui.backstage", &json!({"page": "open"}), off).is_err());
+        assert!(check_ui("ui.backstage", &json!({"page": "print"}), off).is_err());
+        assert!(check_ui("ui.backstage", &json!({"page": "info"}), off).is_ok());
+        assert!(check_ui("ui.backstage", &json!({"value": false}), off).is_ok());
+    }
+
+    /// The policy groups switch on their own interface commands and Backstage pages only.
+    #[test]
+    fn policy_groups_switch_on_their_own_interface_commands() {
+        let print = HostPolicy::from_groups(&["print"]);
+        let links = HostPolicy::from_groups(&["external_links"]);
+        let export = HostPolicy::from_groups(&["export"]);
+        for id in PRINT_UI {
+            assert_eq!(classify(id), Class::Blocked, "{id}");
+            assert!(check_ui(id, &json!({}), print).is_ok() && check_ui(id, &json!({}), links).is_err(), "{id}");
+        }
+        assert!(check_ui("ui.discord", &json!({}), links).is_ok() && check_ui("ui.discord", &json!({}), print).is_err());
+        assert!(check_ui("ui.openFileDialog", &json!({}), HostPolicy::from_groups(&["print", "export", "external_links"])).is_err(), "opening stays blocked");
+        assert!(check_ui("ui.backstage", &json!({"page": "print"}), print).is_ok());
+        assert!(check_ui("ui.backstage", &json!({"page": "saveAs"}), export).is_ok());
+        assert!(check_ui("ui.backstage", &json!({"page": "open"}), export).is_err());
     }
 }

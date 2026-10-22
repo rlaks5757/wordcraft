@@ -536,9 +536,6 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     {
         let _ = app.run("ui.caretAnimation", json!({"value": caret}));
     }
-    if app.host_locked() {
-        return;
-    }
     ui.add_space(8.0);
     section(ui, "Customize");
     ui.horizontal(|ui| {

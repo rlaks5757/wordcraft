@@ -318,6 +318,10 @@ pub fn split(
     swatch: Option<Color32>,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
+    // Host mode: a split button for a refused command is not drawn.
+    if app.host_refusal(id, &Value::Null).is_err() {
+        return;
+    }
     let tip = tl!(tip);
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
@@ -367,6 +371,10 @@ pub fn menu_button(
     id: &str,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
+    // Host mode: a menu button about a refused command is not drawn.
+    if !id.is_empty() && app.host_refusal(id, &Value::Null).is_err() {
+        return;
+    }
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     let label = label.filter(|_| big_btn || !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());

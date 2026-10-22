@@ -211,7 +211,8 @@ impl Default for View {
 }
 
 /// About ▸ Contributors: a name toggle, a sort, and the list as a grab bag or a table.
-pub fn contributors_ui(ui: &mut egui::Ui) {
+/// `links`: the names link to their GitHub pages (off in a host-locked app, which opens no other sites).
+pub fn contributors_ui(ui: &mut egui::Ui, links: bool) {
     let id = egui::Id::new("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
@@ -253,14 +254,14 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
         if list.is_empty() {
             ui.label(tl!("No contributor data was built into this copy."));
         } else if v.table {
-            table(ui, &list, &mut v);
+            table(ui, &list, &mut v, links);
         } else {
             ui.horizontal_wrapped(|ui| {
                 for (i, c) in list.iter().enumerate() {
                     if i > 0 {
                         ui.label(RichText::new("·").weak());
                     }
-                    ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.summary());
+                    name_link(ui, c, v.names, links).on_hover_text(c.summary());
                 }
             });
         }
@@ -268,7 +269,12 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
     ui.data_mut(|d| d.insert_temp(id, v));
 }
 
-fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
+/// A contributor's name: a link to their GitHub page, or plain text when links are off.
+fn name_link(ui: &mut egui::Ui, c: &Contributor, names: NameMode, links: bool) -> egui::Response {
+    if links { ui.hyperlink_to(c.name(names), format!("https://github.com/{}", c.login)) } else { ui.label(c.name(names)) }
+}
+
+fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View, links: bool) {
     egui::Grid::new("credits_table").striped(true).num_columns(SortKey::ALL.len()).show(ui, |ui| {
         for k in SortKey::ALL {
             let arrow = if v.key == k { if v.ascending { " ▲" } else { " ▼" } } else { "" };
@@ -283,7 +289,7 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
         }
         ui.end_row();
         for c in list {
-            ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)).on_hover_text(c.summary());
+            name_link(ui, c, v.names, links).on_hover_text(c.summary());
             ui.label(group(c.prs));
             ui.label(group(c.commits));
             ui.label(group(c.lines_added));

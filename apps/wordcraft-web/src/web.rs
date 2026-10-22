@@ -60,14 +60,14 @@ pub fn start() {
                     if let Some(rs) = &cc.wgpu_render_state {
                         log::info!("wordcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
-                    // Fonts the user added on an earlier visit (#582); the app notices them arrive. In host
-                    // mode nothing comes from the user's machine: no stored fonts, no pasted pictures.
+                    // Fonts the user added on an earlier visit (#582); the app notices them arrive. Host
+                    // mode keeps no font files in the browser, so none are loaded.
                     if !host {
                         font_store::load_all(cc.egui_ctx.clone());
                     }
                     let inbox: Inbox = Inbox::default();
                     let pasted: Inbox = Inbox::default();
-                    if !host && let Err(e) = listen_for_pasted_pictures(pasted.clone(), cc.egui_ctx.clone()) {
+                    if let Err(e) = listen_for_pasted_pictures(pasted.clone(), cc.egui_ctx.clone()) {
                         log::error!("pasting pictures is unavailable: {e}");
                     }
                     // The browser's locale picks the new document's paper, the units and the
@@ -144,7 +144,7 @@ struct WebShell {
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
     bridge: Option<crate::host::Bridge>,
-    /// Locked to the parent page: files dropped on the window and links are refused.
+    /// Locked to the parent page: files dropped on the window are refused.
     host: bool,
 }
 
@@ -202,7 +202,8 @@ impl eframe::App for WebShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
-        if self.host {
+        // Host mode: links open other sites only when the parent's policy allows it.
+        if !self.app.links_allowed() {
             strip_open_url(ui.ctx());
         }
     }
@@ -310,19 +311,12 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
     }
 }
 
-/// Host mode: nothing leaves through the browser's own file and print paths. The pickers, the
-/// print dialog and the font store stay unset, so the app has no way to ask for them
-/// ([`WordApp`] refuses those requests itself as well).
+/// Host mode: the browser's font store keeps no font files (the app refuses Add Font too). The
+/// pickers, print dialog and system fonts stay: pictures, recipients and fonts come *into* the
+/// document, and the app lets a picker or print through only as the parent's policy says.
 fn lock_services(services: &mut Services) {
-    services.open_async = None;
-    services.pick_open = None;
-    services.pick_save = None;
-    services.file_dialog = None;
-    services.print = None;
-    services.inbox = None;
     services.store_font = None;
     services.forget_font = None;
-    services.load_system_fonts = None;
 }
 
 /// Host mode: links open nothing. Document links and the About box's links both end as an

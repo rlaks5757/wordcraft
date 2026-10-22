@@ -2,8 +2,10 @@
 //! WordCraft in an `<iframe>`. Messages are plain objects with a `type`:
 //!
 //! - `wordcraft:ready` (to the parent): `{ version }`, the app is listening; send a file now.
-//! - `wordcraft:open` (from the parent): `{ name, bytes }`, bytes an `ArrayBuffer` or
+//! - `wordcraft:open` (from the parent): `{ name, bytes, policy? }`, bytes an `ArrayBuffer` or
 //!   `Uint8Array`. It opens like a document picked with File › Open or dropped on the window.
+//!   `policy: { allow: ["print", "export", "external_links"] }` switches those groups on for this
+//!   document; without a valid policy they are all off.
 //! - `wordcraft:save` (to the parent): `{ name, bytes }` (a transferred `ArrayBuffer`) for every
 //!   file WordCraft would otherwise download: Save and Save As (a .docx document) and Export
 //!   (such as PDF). The parent stores it and reports failures itself.
@@ -26,10 +28,14 @@ use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
 use wordcraft_ui_egui::host_table::{self, MAX_CELL_CHARS, MAX_COLS, MAX_ROWS};
-use wordcraft_ui_egui::{Inbox, Services, WordApp};
+use wordcraft_engine::host_policy::HostPolicy;
+use wordcraft_ui_egui::{HostPolicySlot, Inbox, Services, WordApp};
 
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
+
+/// Most group ids read from a policy.
+const MAX_POLICY_IDS: usize = 64;
 
 /// Most table requests waiting for the next frame; more are dropped.
 const MAX_PENDING_TABLES: usize = 16;
@@ -76,8 +82,10 @@ impl Bridge {
     pub fn connect(&self, services: &mut Services, ctx: egui::Context) {
         // The parent's documents wait apart from the user's own files (picker, drops).
         let host_inbox = Inbox::default();
+        let policy = HostPolicySlot::default();
         services.host_inbox = Some(host_inbox.clone());
-        self.listen(host_inbox, ctx);
+        services.host_policy = Some(policy.clone());
+        self.listen(host_inbox, policy, ctx);
         let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes)));
         // The app tells the dirty flag after each pass; the parent hears it when it changes.
@@ -136,7 +144,7 @@ impl Bridge {
             .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
     }
 
-    fn listen(&self, inbox: Inbox, ctx: egui::Context) {
+    fn listen(&self, inbox: Inbox, policy_slot: HostPolicySlot, ctx: egui::Context) {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
         let tables = self.tables.clone();
@@ -149,6 +157,8 @@ impl Bridge {
                 Some("wordcraft:open") => {
                     let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Document.docx".to_string());
                     let Some(bytes) = bytes(&data) else { return };
+                    // The policy goes in before the file, so the app finds both together.
+                    *policy_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(policy(&data));
                     inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
                 }
                 Some("wordcraft:insert-table") => {
@@ -180,6 +190,17 @@ fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
         js_sys::Reflect::set(&m, &JsValue::from_str(key), value).ok()?;
     }
     Some(m)
+}
+
+/// The groups the open message's `policy.allow` switches on. A missing or malformed policy means
+/// every group off; unknown ids are ignored.
+fn policy(data: &JsValue) -> HostPolicy {
+    let get = |from: &JsValue, key: &str| js_sys::Reflect::get(from, &JsValue::from_str(key)).ok();
+    let Some(allow) = get(data, "policy").and_then(|p| get(&p, "allow")).filter(|a| js_sys::Array::is_array(a)) else {
+        return HostPolicy::default();
+    };
+    let ids: Vec<String> = js_sys::Array::from(&allow).iter().take(MAX_POLICY_IDS).filter_map(|v| v.as_string()).collect();
+    HostPolicy::from_groups(&ids)
 }
 
 fn string(data: &JsValue, key: &str) -> Option<String> {

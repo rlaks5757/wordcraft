@@ -649,6 +649,10 @@ pub(crate) fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: 
 
 /// [`mi`] with a drawn icon before the label.
 fn mi_icon(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value) {
+    // Host mode: an item for a command the lock refuses is not drawn.
+    if app.host_refusal(id, &params).is_err() {
+        return;
+    }
     let sc = crate::widgets::shortcut_text(app, id);
     let enabled = crate::widgets::enabled(app, id);
     let resp = ui.add_enabled_ui(enabled, |ui| crate::widgets::icon_menu_item(ui, icon, tl!(label), &sc, 200.0)).inner;
@@ -660,6 +664,10 @@ fn mi_icon(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, pa
 
 /// A menu item whose text is already in the interface language.
 fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) {
+    // Host mode: an item for a command the lock refuses is not drawn.
+    if app.host_refusal(id, &params).is_err() {
+        return;
+    }
     let sc = crate::widgets::shortcut_text(app, id);
     let enabled = crate::widgets::enabled(app, id);
     let resp = ui.add_enabled(enabled, egui::Button::new(text).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
@@ -876,6 +884,10 @@ fn language_checks(current: &str, listed: impl Fn(&str) -> bool) -> LanguageChec
 
 /// A menu item with a check mark when `checked` (the current choice of several).
 fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str, params: Value) {
+    // Host mode: an item for a command the lock refuses is not drawn.
+    if app.host_refusal(id, &params).is_err() {
+        return;
+    }
     // An invisible mark keeps the unchecked labels aligned with the checked one.
     let mark = egui::RichText::new("✓");
     let mark = if checked { mark } else { mark.color(egui::Color32::TRANSPARENT) };

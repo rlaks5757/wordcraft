@@ -121,6 +121,9 @@ pub struct Services {
     /// is always a document to open, whatever its name, and a file the user picks is never one the
     /// parent sent.
     pub host_inbox: Option<Inbox>,
+    /// Web, host mode: the policy groups the parent's last open message switched on. Taken with
+    /// the files in `host_inbox`; empty means every group off.
+    pub host_policy: Option<HostPolicySlot>,
     /// Web: pictures pasted from the browser's clipboard (the bytes; the name is ignored). Kept
     /// apart from `inbox` because a paste only lands in the document when the page is the edit
     /// target (#1349), where a dropped or opened file always lands.
@@ -223,6 +226,9 @@ pub enum DefaultApp {
 
 /// Files delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+
+/// The policy the parent's open message carries, until the app picks it up.
+pub type HostPolicySlot = std::sync::Arc<std::sync::Mutex<Option<wordcraft_engine::host_policy::HostPolicy>>>;
 
 /// Whether a pasted picture belongs in the document: the page has keyboard focus, and no
 /// Backstage or dialog is open (#1349). A focused text field (comment, Find box) means the page
@@ -844,13 +850,19 @@ impl WordApp {
         self.session.is_host_locked()
     }
 
+    /// Whether links may open other sites: always outside host mode, in host mode only when the
+    /// parent's policy switched on `external_links`.
+    pub fn links_allowed(&self) -> bool {
+        !self.session.is_host_locked() || self.session.host_policy().external_links
+    }
+
     /// `Err` when the host lock refuses command `id` (engine commands by the engine's allowlist,
     /// `ui.*` by [`host_lock`]). Silent: no status message, the control is just absent.
     fn host_refusal(&self, id: &str, params: &Value) -> Result<(), String> {
         if !self.session.is_host_locked() {
             return Ok(());
         }
-        if id.starts_with("ui.") { host_lock::check_ui(id, params) } else { self.session.host_check(id, params) }
+        if id.starts_with("ui.") { host_lock::check_ui(id, params, self.session.host_policy()) } else { self.session.host_check(id, params) }
     }
 
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
@@ -2268,7 +2280,7 @@ impl WordApp {
         keys::global_shortcuts(self, &ctx);
         self.refocus_after_chrome_click(&ctx);
         if let Some(url) = self.canvas.open_url.take()
-            && !self.session.is_host_locked()
+            && self.links_allowed()
         {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
@@ -2356,10 +2368,6 @@ impl WordApp {
     fn drain_inbox(&mut self) {
         let Some(inbox) = self.services.inbox.clone() else { return };
         let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
-        // Host mode: only the parent's documents ([`Self::drain_host_inbox`]) come in.
-        if self.session.is_host_locked() {
-            return;
-        }
         let mut placed_picture = false;
         for (name, bytes) in files {
             let lower = name.to_ascii_lowercase();
@@ -2395,6 +2403,13 @@ impl WordApp {
     fn drain_host_inbox(&mut self) {
         let Some(inbox) = self.services.host_inbox.clone() else { return };
         let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
+        // The policy arrives with the open message; a message without one means every group off.
+        if !files.is_empty()
+            && let Some(slot) = &self.services.host_policy
+        {
+            let policy = slot.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap_or_default();
+            self.session.set_host_policy(policy);
+        }
         for (name, bytes) in files {
             // The user's own Open is blocked in host mode; the parent's document is the one open
             // that passes the lock (it stays armed while a Save Changes prompt waits).
@@ -2414,10 +2429,6 @@ impl WordApp {
     fn drain_pasted(&mut self) {
         let Some(pasted) = self.services.pasted.clone() else { return };
         let pictures = std::mem::take(&mut *pasted.lock().unwrap_or_else(|e| e.into_inner()));
-        // Host mode: nothing comes in from the user's machine, a pasted picture included.
-        if self.session.is_host_locked() {
-            return;
-        }
         let target = paste_target(self.canvas.focused, self.ui.backstage, self.dialog.is_some() || self.file_dialog_open());
         for (_, bytes) in pictures {
             if !target {
@@ -7333,8 +7344,8 @@ mod tests {
         a.session.doc.plain_text(wordcraft_doc::StoryRef::Body)
     }
 
-    /// Host mode: the parent's document opens, and the user's own files, pasted pictures and
-    /// file commands do nothing.
+    /// Host mode: the parent's document opens; a picture the user picks or pastes goes into it,
+    /// while a document the user picks (or drops) is refused.
     #[test]
     fn host_lock_lets_the_parent_open_and_refuses_the_users_files() {
         let mut a = locked_app();
@@ -7346,16 +7357,47 @@ mod tests {
         assert!(body(&a).contains("from the parent"), "the parent's document opens under the lock");
         // The grant is gone after that one open: a script's file.open is refused.
         assert!(a.run("file.open", json!({"path": "doc.txt", "data": "AAAA"})).is_err());
-        // A dropped or picked file is not read.
+        // A picked document does not replace the parent's.
+        user.lock().unwrap().push(("mine.txt".into(), b"user document".to_vec()));
+        a.drain_inbox();
+        assert!(!body(&a).contains("user document") && body(&a).contains("from the parent"));
+        // A picked picture goes into the document.
         user.lock().unwrap().push(("mine.png".into(), png_bytes([200, 30, 30, 255])));
         a.drain_inbox();
-        assert_eq!(object_count(&mut a), 0, "a user file is not inserted");
+        assert_eq!(object_count(&mut a), 1, "a picked picture is inserted");
+        // So does a pasted one (in an app of its own: a picture already selected would be replaced).
+        let mut b = locked_app();
         let pasted: Inbox = Inbox::default();
         pasted.lock().unwrap().push(("p.png".into(), png_bytes([200, 30, 30, 255])));
-        a.services.pasted = Some(pasted);
-        a.canvas.focused = true;
-        a.drain_pasted();
-        assert_eq!(object_count(&mut a), 0, "a pasted picture is not inserted");
+        b.services.pasted = Some(pasted);
+        b.canvas.focused = true;
+        b.drain_pasted();
+        assert_eq!(object_count(&mut b), 1, "a pasted picture is inserted");
+    }
+
+    /// The policy groups of the parent's open message switch on print and export, per document,
+    /// and a message without a policy switches them off again.
+    #[test]
+    fn host_lock_policy_comes_with_the_open_message() {
+        use wordcraft_engine::host_policy::HostPolicy;
+        let mut a = locked_app();
+        let (host, slot) = (Inbox::default(), HostPolicySlot::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.host_policy = Some(slot.clone());
+        let refused = |a: &mut WordApp, id: &str| a.run(id, json!({})).err().is_some_and(|e| e.contains("not available in PPM"));
+        assert!(refused(&mut a, "file.saveAs") && refused(&mut a, "ui.print") && refused(&mut a, "ui.discord"));
+        *slot.lock().unwrap() = Some(HostPolicy::from_groups(&["print", "export", "external_links"]));
+        host.lock().unwrap().push(("a.txt".into(), b"one".to_vec()));
+        a.drain_host_inbox();
+        assert!(!refused(&mut a, "file.saveAs") && !refused(&mut a, "ui.print") && !refused(&mut a, "ui.discord"));
+        assert!(a.links_allowed());
+        assert!(refused(&mut a, "file.open"), "opening stays blocked whatever the policy says");
+        assert!(refused(&mut a, "tools.macros"));
+        // The next document comes with no policy: everything is off again.
+        *slot.lock().unwrap() = Some(HostPolicy::default());
+        host.lock().unwrap().push(("b.txt".into(), b"two".to_vec()));
+        a.drain_host_inbox();
+        assert!(refused(&mut a, "file.saveAs") && refused(&mut a, "ui.print") && !a.links_allowed());
     }
 
     /// A parent document that arrives while changes are unsaved waits for the Save Changes
@@ -7382,7 +7424,7 @@ mod tests {
     #[test]
     fn host_lock_closes_file_dialogs_pickers_and_menu_entries() {
         let mut a = locked_app();
-        for id in ["file.new", "file.open", "file.saveAs", "file.exportPdf", "file.print", "insert.picture", "tools.attachTemplate", "tools.macros"] {
+        for id in ["file.new", "file.open", "file.saveAs", "file.exportPdf", "file.print", "file.rename", "tools.attachTemplate", "tools.macros"] {
             assert!(a.run(id, json!({})).is_err(), "{id} is refused");
             assert!(a.execute(id, json!({})).is_err(), "{id} is refused by execute");
         }
@@ -7397,11 +7439,16 @@ mod tests {
             file_dialogs::Asked::Done(Err(_))
         ));
         assert!(dialogs::Dialog::open("templates", &mut a).is_none());
+        assert!(!a.links_allowed(), "links are off without the policy");
         a.open_dialog();
-        a.pick_picture();
         a.pick_font();
-        a.load_system_fonts();
         assert!(!a.file_dialog_open());
+        // A file to put into the document may be asked for; a document to open or a file to save
+        // to may not (until the policy says so).
+        let picked = file_dialogs::FileDialogRequest::Open { purpose: "picture".into() };
+        assert!(!matches!(a.ask_file(picked, file_dialogs::AfterPick::Picture), file_dialogs::Asked::Done(Err(_))));
+        let save = file_dialogs::FileDialogRequest::Save { name: "x.docx".into() };
+        assert!(matches!(a.ask_file(save, file_dialogs::AfterPick::Export { ext: "pdf".into() }), file_dialogs::Asked::Done(Err(_))));
         // Editing and the plain save still work.
         assert!(a.run("text.insert", json!({"text": "hi"})).is_ok());
         assert!(!widgets::enabled(&a, "file.saveAs"));

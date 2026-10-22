@@ -2684,7 +2684,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             ui.separator();
             match *tab {
-                1 => crate::credits::contributors_ui(ui),
+                1 => crate::credits::contributors_ui(ui, app.links_allowed()),
                 2 => crate::credits::models_ui(ui),
                 _ => {
                     ui.label(egui::RichText::new(tl!("WordCraft")).font(semibold(22.0)));
@@ -2695,7 +2695,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ));
                     ui.add_space(6.0);
                     // Host mode: the version stays, the links to other sites go.
-                    if !app.host_locked() {
+                    if app.links_allowed() {
                         ui.hyperlink_to(tl!("getartcraft.com/apps/wordcraft"), "https://getartcraft.com/apps/wordcraft");
                         ui.hyperlink_to(tl!("Join us on Discord: discord.gg/artcraft"), "https://discord.gg/artcraft");
                         ui.hyperlink_to(tl!("Source code: github.com/storytold/wordcraft"), "https://github.com/storytold/wordcraft");

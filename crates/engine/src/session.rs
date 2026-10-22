@@ -408,6 +408,8 @@ pub struct Session {
     pub(crate) host_lock: bool,
     /// The parent's document name an open may pass the lock for ([`Session::arm_host_open`]).
     pub(crate) host_open: Option<String>,
+    /// The policy groups the parent switched on ([`crate::host_policy::HostPolicy`]).
+    pub(crate) host_policy: crate::host_policy::HostPolicy,
     /// The newest automatic capitalisation, for Word's "Automatically add words to list" (#1857).
     pub(crate) autocap: Option<crate::cmd::tools::AutoCap>,
     rev: u64,
@@ -662,6 +664,7 @@ impl Session {
             join_next: false,
             host_lock: false,
             host_open: None,
+            host_policy: crate::host_policy::HostPolicy::default(),
             autocap: None,
             rev: 1,
             document_id: 1,
@@ -1226,6 +1229,7 @@ impl Session {
             // The PPM host lock: set once at start-up, not an edit.
             host_lock: _,
             host_open: _,
+            host_policy: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {

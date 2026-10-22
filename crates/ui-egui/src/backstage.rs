@@ -38,7 +38,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.ui.backstage_page = "home".into();
     }
     // Host mode: the pages that open, create or export files don't exist; land on Info.
-    if app.host_locked() && !crate::host_lock::BACKSTAGE_PAGES.contains(&app.ui.backstage_page.as_str()) {
+    if app.host_locked() && !crate::host_lock::backstage_page_allowed(&app.ui.backstage_page, app.session.host_policy()) {
         app.ui.backstage_page = "info".into();
     }
     let mac = app.integrated_titlebar;
@@ -85,7 +85,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             ui.add_space(if mac { 12.0 } else { 6.0 });
             for (id, label, icon) in PAGES {
                 // Host mode: only the pages in `BACKSTAGE_PAGES` exist.
-                if app.host_locked() && !crate::host_lock::BACKSTAGE_PAGES.contains(&id) {
+                if app.host_locked() && !crate::host_lock::backstage_page_allowed(id, app.session.host_policy()) {
                     continue;
                 }
                 // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
@@ -121,7 +121,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 app.ui.backstage = false;
                                 app.canvas.want_focus = true;
                             } else {
-                                app.ui.backstage_page = if app.host_locked() { "info" } else { "saveAs" }.into();
+                                app.ui.backstage_page = if app.host_locked() && !crate::host_lock::backstage_page_allowed("saveAs", app.session.host_policy()) { "info" } else { "saveAs" }.into();
                             }
                         }
                         "saveAs" => {
@@ -138,7 +138,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                 for (label, id) in [("About", "about"), ("Discord community", "discord")] {
-                    if id == "discord" && app.host_locked() {
+                    if id == "discord" && !app.links_allowed() {
                         continue;
                     }
                     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
