@@ -134,7 +134,7 @@ impl WordApp {
         // picture, recipients, a document to compare), but not open or replace the document, and
         // saving or printing to a file needs the parent's policy.
         if self.host_locked() && !self.host_allows_pick(&after) {
-            return Asked::Done(Err(format!("파일 대화상자: {}", wordcraft_engine::host_policy::NOT_AVAILABLE)));
+            return Asked::Done(Err(wordcraft_engine::host_policy::NOT_AVAILABLE.to_string()));
         }
         if self.file_dialog_open() {
             log::debug!("file dialog already open; ignoring {req:?}");

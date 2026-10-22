@@ -2468,6 +2468,7 @@ preview	Title	제목
 	Delete Bookmark	책갈피 삭제
 	Filter Recipients	받는 사람 필터
 	Full Screen	전체 화면
+	Full\nScreen	전체\n화면
 	Load System Installed Fonts…	시스템에 설치된 글꼴 불러오기…
 	Privacy Options	개인 정보 옵션
 	Privacy Settings	개인 정보 설정
@@ -2591,13 +2592,13 @@ preview	Title	제목
 	Is not blank	비어 있지 않음
 	Language Preferences…	언어 기본 설정…
 	Large	크게
-	Leave out the date and time of comments and tracked changes when saving	저장할 때 메모와 변경 내용 추적의 날짜와 시간 제외
+	Leave out the date and time of comments and tracked changes when saving	저장할 때 댓글과 변경 내용 추적의 날짜와 시간 제외
 	Less than	보다 작음
 	Less than or equal	작거나 같음
-	Limit and	제한 및
+	Limit and	극한 및
 	Link to:	연결 대상:
 	Local recovery is unavailable or still loading.	로컬 복구를 사용할 수 없거나 아직 불러오는 중입니다.
-	Log	기록
+	Log	로그
 	Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate.	리본, 메뉴, 대화 상자를 더 크게 또는 작게 표시합니다. 자동은 시스템 화면 배율을 따르고, 100%는 1포인트당 화면 픽셀 1개입니다. 문서 확대/축소와는 별개입니다.
 	Mirror margins	대칭 여백
 	More Paper Sizes…	기타 용지 크기…
@@ -2626,15 +2627,15 @@ preview	Title	제목
 	Recovery is disabled while this document has a password.	이 문서에 암호가 있는 동안에는 복구를 사용할 수 없습니다.
 	Reference type:	참조 형식:
 	Remove condition	조건 제거
-	Remove my name from comments, changes and file properties when saving	저장할 때 메모, 변경 내용, 파일 속성에서 내 이름 제거
+	Remove my name from comments, changes and file properties when saving	저장할 때 댓글, 변경 내용, 파일 속성에서 내 이름 제거
 	Rename	이름 바꾸기
-	Researcher needs an online service; WordCraft keeps your documents offline.	리서처는 온라인 서비스가 필요합니다. WordCraft는 문서를 오프라인으로 유지합니다.
+	Researcher needs an online service; WordCraft keeps your documents offline.	리서치 도구는 온라인 서비스가 필요합니다. WordCraft는 문서를 오프라인으로 유지합니다.
 	Restore	복원
 	Restore opens an unsaved copy. Your original file stays unchanged.	복원하면 저장되지 않은 사본이 열립니다. 원본 파일은 그대로 유지됩니다.
 	Saving {name} was cancelled, so it is still open and nothing was lost.	{name} 저장이 취소되었지만 문서는 그대로 열려 있고 잃은 내용은 없습니다.
 	Scale to paper size	용지 크기에 맞게 조정
 	Select a place in this document:	이 문서에서 위치 선택:
-	Set Proofing Language…	언어 교정 설정…
+	Set Proofing Language…	교정 언어 설정…
 	Show alignment guides when moving pictures and shapes	그림과 도형을 이동할 때 맞춤 안내선 표시
 	Show its list number	해당 목록 번호 표시
 	Show its number relative to this field	이 필드 기준 상대 번호 표시

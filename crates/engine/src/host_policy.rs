@@ -223,14 +223,14 @@ pub const NOT_AVAILABLE: &str = "PPM에서는 사용할 수 없습니다";
 /// and the parent's override decide, and Save to another name, format or password needs Save As.
 pub fn check(id: &str, params: &Value, policy: &HostPolicy) -> Result<(), String> {
     if !policy.command_on(id) {
-        return Err(format!("{id}: {NOT_AVAILABLE}"));
+        return Err(NOT_AVAILABLE.to_string());
     }
     if id == "file.save"
         && !policy.command_on("file.saveAs")
         && let Some(p) = params.as_object()
         && SAVE_PARAMS_REFUSED.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()))
     {
-        return Err("file.save: PPM stores the document under its own name".to_string());
+        return Err("PPM에서는 문서를 다른 이름, 형식, 암호로 저장할 수 없습니다".to_string());
     }
     Ok(())
 }

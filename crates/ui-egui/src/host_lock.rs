@@ -89,17 +89,17 @@ pub fn grade_ui(id: &str) -> Option<Grade> {
 /// `Err` says why a locked app refuses the `ui.*` command `id` with `params`.
 pub fn check_ui(id: &str, params: &Value, policy: &HostPolicy) -> Result<(), String> {
     if !grade_ui(id).is_some_and(|g| policy.allows(policy_id(id), g)) {
-        return Err(format!("{id}: {}", wordcraft_engine::host_policy::NOT_AVAILABLE));
+        return Err(wordcraft_engine::host_policy::NOT_AVAILABLE.to_string());
     }
     let name = params.get("name").and_then(Value::as_str);
     if id == "ui.dialog" && name.is_some_and(|n| BLOCKED_DIALOGS.contains(&n)) {
-        return Err(format!("{} 대화상자: {}", name.unwrap_or_default(), wordcraft_engine::host_policy::NOT_AVAILABLE));
+        return Err(wordcraft_engine::host_policy::NOT_AVAILABLE.to_string());
     }
     if id == "ui.backstage"
         && let Some(page) = params.get("page").and_then(Value::as_str)
         && !backstage_page_allowed(page, policy)
     {
-        return Err(format!("{page} 페이지: {}", wordcraft_engine::host_policy::NOT_AVAILABLE));
+        return Err(wordcraft_engine::host_policy::NOT_AVAILABLE.to_string());
     }
     Ok(())
 }
@@ -219,11 +219,19 @@ mod tests {
         assert!(check_ui("ui.backstage", &json!({"page": "open"}), &export).is_err());
     }
 
+    /// Labels that are a key or a product name, written the same in Korean.
+    const SAME_IN_KOREAN: &[&str] = &["text.backTab", "caret.pageUp", "caret.pageDown", "insert.smartArt", "insert.wordArt"];
+
+    /// Otherwise a Korean name has Hangul in it; a label with no letters at all ("100%") reads the same.
+    fn has_hangul_or_no_letters(s: &str) -> bool {
+        s.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c)) || !s.chars().any(char::is_alphabetic)
+    }
+
     /// The admin screen shows the Korean name: every command has one.
     #[test]
     fn every_command_has_a_korean_label() {
         let file = commands_json();
-        let missing: Vec<&str> = file["commands"].as_array().unwrap().iter().filter(|c| c["labelKo"].as_str().is_none_or(str::is_empty)).filter_map(|c| c["id"].as_str()).collect();
+        let missing: Vec<&str> = file["commands"].as_array().unwrap().iter().filter(|c| !c["labelKo"].as_str().is_some_and(has_hangul_or_no_letters)).filter(|c| !c["id"].as_str().is_some_and(|id| SAME_IN_KOREAN.contains(&id))).filter_map(|c| c["id"].as_str()).collect();
         assert!(missing.is_empty(), "no Korean label: {missing:?}");
     }
 

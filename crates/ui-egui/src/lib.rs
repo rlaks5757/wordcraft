@@ -7584,6 +7584,12 @@ mod tests {
         a.ui.language = "ko".into();
         assert!(a.run("ui.language", json!({"value": "en"})).is_err());
         assert_eq!(a.ui.language, "ko");
+        // Review > Language > Language Preferences… opens the Language pane; no way to a language is left there.
+        a.run("file.options", json!({"pane": "language"})).unwrap();
+        for value in ["en", "auto", "de"] {
+            assert!(a.run("ui.language", json!({"value": value})).is_err(), "{value}");
+        }
+        assert_eq!(a.ui.language, "ko");
         for id in ["file.new", "file.open", "file.saveAs", "file.exportPdf", "file.print", "file.rename", "tools.recordMacro", "tools.macros"] {
             assert!(a.run(id, json!({})).is_err(), "{id} is refused");
             assert!(a.execute(id, json!({})).is_err(), "{id} is refused by execute");

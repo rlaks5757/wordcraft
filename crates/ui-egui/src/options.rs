@@ -430,10 +430,13 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn language(app: &mut WordApp, ui: &mut Ui) {
-    section(ui, "Interface language");
-    language_picker(app, ui);
+    // The PPM build is always Korean: no interface language section at all.
+    if !app.host_locked() {
+        section(ui, "Interface language");
+        language_picker(app, ui);
+        ui.add_space(8.0);
+    }
     // #414 (detect the document's language) goes here.
-    ui.add_space(8.0);
     section(ui, "Proofing language");
     note(ui, "Spelling and grammar are checked in English (United States).");
 }
@@ -630,10 +633,6 @@ fn animations_picker(app: &mut WordApp, ui: &mut Ui) {
 /// Interface language: follow the system (the default) or pick one (#8).
 fn language_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::i18n::{AUTO, Lang};
-    // The PPM build is always Korean: no choice to show.
-    if app.host_locked() {
-        return;
-    }
     // The language names are in their own scripts: fonts for them load from the next frame.
     app.want_system_cjk = true;
     let system = crate::i18n::system_lang();
@@ -768,6 +767,28 @@ mod tests {
         );
         h.run_steps(4);
         h
+    }
+
+    /// The PPM build is always Korean: the Language pane has no interface language section.
+    #[test]
+    fn language_pane_has_no_interface_language_when_host_locked() {
+        for locked in [false, true] {
+            let mut a = app();
+            if locked {
+                a.session.lock_to_host();
+            }
+            a.run("file.options", json!({"pane": "language"})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            h.run_steps(4);
+            assert_eq!(h.query_by_label("Interface language").is_some(), !locked, "locked: {locked}");
+        }
     }
 
     /// #1266: check the actual painted text and renderer clip, including the bold selected
