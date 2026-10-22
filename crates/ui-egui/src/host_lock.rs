@@ -10,7 +10,7 @@
 //! `every_ui_command_is_classified`.
 
 use serde_json::Value;
-use wordcraft_engine::host_policy::HostPolicy;
+use wordcraft_engine::host_policy::{Grade, HostPolicy};
 
 /// Interface commands a host-locked app runs.
 #[rustfmt::skip]
@@ -21,18 +21,29 @@ const ALLOWED_UI: &[&str] = &[
     "ui.unlistedCommand", "ui.wheel",
 ];
 
-/// Interface commands a host-locked app refuses: they open documents, print, recover files, or reach outside.
+/// Interface commands no policy turns on: they open documents, recover files, or reach outside.
 #[rustfmt::skip]
-const BLOCKED_UI: &[&str] = &[
-    "ui.discord", "ui.fileBrowser", "ui.makeDefaultApp", "ui.openFileDialog", "ui.print", "ui.printSettings", "ui.printSubmit", "ui.recoveryDiscard",
-    "ui.startScreen",
+const LOCKED_UI: &[&str] = &[
+    "ui.fileBrowser", "ui.makeDefaultApp", "ui.openFileDialog", "ui.recoveryDiscard", "ui.startScreen",
 ];
 
-/// Blocked interface commands the policy's `print` group switches on.
-const PRINT_UI: &[&str] = &["ui.print", "ui.printSettings", "ui.printSubmit"];
+/// Interface commands that are off until the policy turns them on: print, and the Discord link.
+#[rustfmt::skip]
+const OFF_UI: &[&str] = &["ui.discord", "ui.print", "ui.printSettings", "ui.printSubmit"];
 
-/// Blocked interface commands the policy's `external_links` group switches on.
-const LINK_UI: &[&str] = &["ui.discord"];
+/// The switch for every external link (help, Discord, contributors, links in the document). It is
+/// not a command in the source, only an id the parent can switch in its policy.
+pub const EXTERNAL_LINKS: &str = "ui.externalLinks";
+
+/// The id whose switch an interface command follows: printing follows `file.print`, the Discord
+/// link follows [`EXTERNAL_LINKS`], anything else its own id.
+fn policy_id(id: &str) -> &str {
+    match id {
+        "ui.print" | "ui.printSettings" | "ui.printSubmit" => "file.print",
+        "ui.discord" => EXTERNAL_LINKS,
+        _ => id,
+    }
+}
 
 /// Reference-manager commands (`ui.zotero.*`): the desktop app talks to a program on the user's machine.
 const BLOCKED_UI_PREFIXES: &[&str] = &["ui.zotero."];
@@ -42,42 +53,42 @@ const BLOCKED_UI_PREFIXES: &[&str] = &["ui.zotero."];
 /// these names opens nothing.
 pub const BLOCKED_DIALOGS: &[&str] = &["templates", "organizer", "encryptPassword", "renameDocument"];
 
-/// Whether a host-locked app shows Backstage page `page`: Info, Save and Options always; Print
-/// and Save As / Export only with the policy groups that allow them.
-pub fn backstage_page_allowed(page: &str, policy: HostPolicy) -> bool {
+/// Whether a host-locked app shows Backstage page `page`: Info, Save and Options always; Print and
+/// Save As / Export only when the policy has the command behind them on.
+pub fn backstage_page_allowed(page: &str, policy: &HostPolicy) -> bool {
     match page {
         "info" | "save" | "options" => true,
-        "print" => policy.print,
-        "saveAs" | "export" => policy.export,
+        "print" => policy.command_on("file.print"),
+        "saveAs" => policy.command_on("file.saveAs"),
+        "export" => policy.command_on("file.exportPdf"),
         _ => false,
     }
+}
+
+/// Whether the policy lets links open (help, Discord, contributors, links in the document).
+pub fn links_on(policy: &HostPolicy) -> bool {
+    policy.allows(EXTERNAL_LINKS, Grade::Off)
 }
 
 /// Options panes a host-locked app hides (they set AutoSave, recent files and agent control).
 pub const HIDDEN_OPTIONS_PANES: &[&str] = &["save", "agents"];
 
-/// How the lock sees a `ui.*` id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Class {
-    Allowed,
-    Blocked,
-    Unclassified,
-}
-
-pub fn classify(id: &str) -> Class {
+/// The grade of a `ui.*` id; `None` for one in no table.
+pub fn grade_ui(id: &str) -> Option<Grade> {
     if ALLOWED_UI.contains(&id) {
-        Class::Allowed
-    } else if BLOCKED_UI.contains(&id) || BLOCKED_UI_PREFIXES.iter().any(|p| id.starts_with(p)) {
-        Class::Blocked
+        Some(Grade::On)
+    } else if OFF_UI.contains(&id) || id == EXTERNAL_LINKS {
+        Some(Grade::Off)
+    } else if LOCKED_UI.contains(&id) || BLOCKED_UI_PREFIXES.iter().any(|p| id.starts_with(p)) {
+        Some(Grade::Locked)
     } else {
-        Class::Unclassified
+        None
     }
 }
 
 /// `Err` says why a locked app refuses the `ui.*` command `id` with `params`.
-pub fn check_ui(id: &str, params: &Value, policy: HostPolicy) -> Result<(), String> {
-    let switched_on = (policy.print && PRINT_UI.contains(&id)) || (policy.external_links && LINK_UI.contains(&id));
-    if classify(id) != Class::Allowed && !(classify(id) == Class::Blocked && switched_on) {
+pub fn check_ui(id: &str, params: &Value, policy: &HostPolicy) -> Result<(), String> {
+    if !grade_ui(id).is_some_and(|g| policy.allows(policy_id(id), g)) {
         return Err(format!("{id}: not available in PPM"));
     }
     let name = params.get("name").and_then(Value::as_str);
@@ -91,6 +102,34 @@ pub fn check_ui(id: &str, params: &Value, policy: HostPolicy) -> Result<(), Stri
         return Err(format!("the {page} page is not available in PPM"));
     }
     Ok(())
+}
+
+/// Korean name for a UI text, with the English kept where the catalog has none.
+fn ko(text: &str) -> String {
+    match crate::i18n::Lang::from_code("ko") {
+        Some(lang) => crate::i18n::tr(lang, text).to_string(),
+        None => text.to_string(),
+    }
+}
+
+/// The command list the admin screen reads (`commands.json`): every engine command with its
+/// grade, English and Korean name and menu place, plus [`EXTERNAL_LINKS`]. Built from the same
+/// tables the lock enforces, so the file can't disagree with them.
+pub fn commands_json() -> Value {
+    let registry = wordcraft_engine::cmd::registry();
+    let mut list: Vec<Value> = registry
+        .all()
+        .iter()
+        .map(|c| {
+            let grade = wordcraft_engine::host_policy::grade(c.id).map_or("locked", Grade::as_str);
+            let place_ko = c.location.split(" \u{203a} ").map(ko).collect::<Vec<_>>().join(" \u{203a} ");
+            serde_json::json!({"id": c.id, "label": c.label, "labelKo": ko(c.label), "location": c.location, "locationKo": place_ko, "grade": grade})
+        })
+        .collect();
+    list.push(serde_json::json!({
+        "id": EXTERNAL_LINKS, "label": "External links", "labelKo": "외부 링크", "location": "File \u{203a} Info", "locationKo": "파일 \u{203a} 정보", "grade": "off",
+    }));
+    serde_json::json!({"app": "wordcraft", "commands": list})
 }
 
 #[cfg(test)]
@@ -121,19 +160,23 @@ mod tests {
             }
         }
         assert!(found.len() > 40, "the scan found only {found:?}");
-        let loose: Vec<&String> = found.iter().filter(|id| classify(id) == Class::Unclassified).collect();
-        assert!(loose.is_empty(), "classify these in host_lock.rs (ALLOWED_UI / BLOCKED_UI): {loose:?}");
-        for id in ALLOWED_UI.iter().chain(BLOCKED_UI) {
+        let loose: Vec<&String> = found.iter().filter(|id| grade_ui(id).is_none()).collect();
+        assert!(loose.is_empty(), "classify these in host_lock.rs (ALLOWED_UI / OFF_UI / LOCKED_UI): {loose:?}");
+        for id in ALLOWED_UI.iter().chain(OFF_UI).chain(LOCKED_UI) {
             assert!(found.contains(*id), "{id} is listed but no longer exists");
         }
         for id in ALLOWED_UI {
-            assert!(!BLOCKED_UI.contains(id), "{id} is in both tables");
+            assert!(!OFF_UI.contains(id) && !LOCKED_UI.contains(id), "{id} is in two tables");
         }
+    }
+
+    fn overrides(pairs: &[(&str, bool)]) -> HostPolicy {
+        HostPolicy::new(pairs.iter().map(|(k, v)| (k.to_string(), *v)))
     }
 
     #[test]
     fn blocked_ui_commands_and_dialogs_are_refused() {
-        let off = HostPolicy::default();
+        let off = &HostPolicy::default();
         for id in ["ui.openFileDialog", "ui.print", "ui.discord", "ui.startScreen", "ui.zotero.refresh", "ui.somethingNew"] {
             assert!(check_ui(id, &json!({}), off).is_err(), "{id}");
         }
@@ -147,20 +190,52 @@ mod tests {
         assert!(check_ui("ui.backstage", &json!({"value": false}), off).is_ok());
     }
 
-    /// The policy groups switch on their own interface commands and Backstage pages only.
+    /// Print, links and the Backstage pages follow the engine commands and the link switch.
     #[test]
-    fn policy_groups_switch_on_their_own_interface_commands() {
-        let print = HostPolicy::from_groups(&["print"]);
-        let links = HostPolicy::from_groups(&["external_links"]);
-        let export = HostPolicy::from_groups(&["export"]);
-        for id in PRINT_UI {
-            assert_eq!(classify(id), Class::Blocked, "{id}");
-            assert!(check_ui(id, &json!({}), print).is_ok() && check_ui(id, &json!({}), links).is_err(), "{id}");
+    fn overrides_switch_their_own_interface_commands() {
+        let print = overrides(&[("file.print", true)]);
+        let links = overrides(&[(EXTERNAL_LINKS, true)]);
+        let export = overrides(&[("file.saveAs", true), ("file.exportPdf", true)]);
+        for id in ["ui.print", "ui.printSettings", "ui.printSubmit"] {
+            assert!(check_ui(id, &json!({}), &print).is_ok() && check_ui(id, &json!({}), &links).is_err(), "{id}");
         }
-        assert!(check_ui("ui.discord", &json!({}), links).is_ok() && check_ui("ui.discord", &json!({}), print).is_err());
-        assert!(check_ui("ui.openFileDialog", &json!({}), HostPolicy::from_groups(&["print", "export", "external_links"])).is_err(), "opening stays blocked");
-        assert!(check_ui("ui.backstage", &json!({"page": "print"}), print).is_ok());
-        assert!(check_ui("ui.backstage", &json!({"page": "saveAs"}), export).is_ok());
-        assert!(check_ui("ui.backstage", &json!({"page": "open"}), export).is_err());
+        assert!(check_ui("ui.discord", &json!({}), &links).is_ok() && check_ui("ui.discord", &json!({}), &print).is_err());
+        assert!(links_on(&links) && !links_on(&print) && !links_on(&HostPolicy::default()));
+        let everything = overrides(&[("file.print", true), ("file.saveAs", true), (EXTERNAL_LINKS, true), ("ui.openFileDialog", true), ("ui.startScreen", true)]);
+        assert!(check_ui("ui.openFileDialog", &json!({}), &everything).is_err(), "opening stays locked");
+        assert!(check_ui("ui.startScreen", &json!({}), &everything).is_err());
+        assert!(check_ui("ui.backstage", &json!({"page": "print"}), &print).is_ok());
+        assert!(check_ui("ui.backstage", &json!({"page": "saveAs"}), &export).is_ok());
+        assert!(check_ui("ui.backstage", &json!({"page": "export"}), &export).is_ok());
+        assert!(check_ui("ui.backstage", &json!({"page": "open"}), &export).is_err());
+    }
+
+    /// commands.json lists exactly the engine's commands with the grade the lock enforces.
+    #[test]
+    fn commands_json_matches_the_tables() {
+        let file = commands_json();
+        let list = file["commands"].as_array().unwrap();
+        let registry = wordcraft_engine::cmd::registry();
+        assert_eq!(list.len(), registry.all().len() + 1, "every command once, plus the link switch");
+        let mut ids = std::collections::BTreeSet::new();
+        for c in list {
+            let id = c["id"].as_str().unwrap();
+            assert!(ids.insert(id), "{id} twice");
+            for key in ["label", "labelKo", "location", "locationKo"] {
+                assert!(c[key].as_str().is_some_and(|t| !t.is_empty()), "{id} has no {key}");
+            }
+            if id == EXTERNAL_LINKS {
+                assert_eq!(c["grade"], "off");
+                continue;
+            }
+            let grade = wordcraft_engine::host_policy::grade(id).expect("classified");
+            assert_eq!(c["grade"], grade.as_str(), "{id}");
+        }
+        for id in ["file.open", "file.print", "format.bold"] {
+            let c = list.iter().find(|c| c["id"] == id).unwrap();
+            assert_eq!(c["grade"], wordcraft_engine::host_policy::grade(id).unwrap().as_str());
+        }
+        let bold = list.iter().find(|c| c["id"] == "format.bold").unwrap();
+        assert_ne!(bold["labelKo"], bold["label"], "Bold has a Korean name");
     }
 }

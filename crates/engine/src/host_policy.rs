@@ -10,9 +10,9 @@
 //! A new command that is in neither table fails `every_command_is_classified`, so nothing
 //! becomes available by being forgotten.
 //!
-//! The parent may switch some blocked commands back on per document with a [`HostPolicy`] (the
-//! `policy.allow` groups of its open message): print, export and external links. Everything else
-//! in [`BLOCKED`] stays blocked whatever the policy says.
+//! Every command has a [`Grade`]: `locked` (no policy turns it on), `off` (off until the parent's
+//! policy turns it on: print, Save As, export) or `on` (on until the policy turns it off). The
+//! parent sends a [`HostPolicy`] with each open message (`policy.overrides`, command id to bool).
 //!
 //! The lock is one-way: no command clears it. The app turns it on once at startup from a build
 //! switch, so a running page can't be talked out of it.
@@ -113,76 +113,96 @@ const ALLOWED: &[&str] = &[
     "wordArt.textOutline", "wordArt.transform",
 ];
 
-/// Commands a host-locked session refuses: they reach files, printing, exports, templates, macros, fonts or other windows.
+/// Commands no policy turns on: they open, create, close or replace the document, keep copies of
+/// it, load templates, macros or font files, or open other windows.
 #[rustfmt::skip]
-const BLOCKED: &[&str] = &[
-    "file.autosave", "file.close", "file.encrypt", "file.exportPdf", "file.exportPng", "file.new", "file.newFromTemplate", "file.open", "file.print",
-    "file.printMarkup", "file.printPdf", "file.recover", "file.rename", "file.saveAs", "file.saveTemplate", "file.share", "file.versions", "font.add",
-    "font.remove", "tools.attachTemplate", "tools.detachTemplate", "tools.linkStyles", "tools.macros", "tools.recordMacro", "tools.templates",
-    "tools.updateStyles", "view.newWindow",
+const LOCKED: &[&str] = &[
+    "file.autosave", "file.close", "file.encrypt", "file.new", "file.newFromTemplate", "file.open", "file.recover", "file.rename", "file.share",
+    "file.versions", "font.add", "font.remove", "tools.attachTemplate", "tools.detachTemplate", "tools.linkStyles", "tools.macros",
+    "tools.recordMacro", "tools.templates", "tools.updateStyles", "view.newWindow",
 ];
 
-/// The groups the parent's `policy.allow` can switch on (everything else stays blocked).
-pub const POLICY_GROUPS: [&str; 3] = ["print", "export", "external_links"];
+/// Commands that are off until the parent's policy turns them on: printing, Save As and export.
+#[rustfmt::skip]
+const OFF: &[&str] = &[
+    "file.exportPdf", "file.exportPng", "file.print", "file.printMarkup", "file.printPdf", "file.saveAs", "file.saveTemplate",
+];
 
-/// Blocked commands the `print` group switches on.
-const PRINT_COMMANDS: &[&str] = &["file.print", "file.printMarkup", "file.printPdf"];
-
-/// Blocked commands the `export` group switches on (Save As, export, download).
-const EXPORT_COMMANDS: &[&str] = &["file.exportPdf", "file.exportPng", "file.saveAs", "file.saveTemplate"];
-
-/// Which policy groups the parent switched on. The default (also what a missing or malformed
-/// policy means) has every group off.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct HostPolicy {
-    pub print: bool,
-    pub export: bool,
-    pub external_links: bool,
+/// Whether a command can be turned on or off by the parent's policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Grade {
+    /// Never available in PPM.
+    Locked,
+    /// Off by default; the policy may turn it on.
+    Off,
+    /// On by default; the policy may turn it off.
+    On,
 }
 
-impl HostPolicy {
-    /// The policy for these group ids; unknown ids are ignored.
-    pub fn from_groups<S: AsRef<str>>(allow: &[S]) -> Self {
-        let has = |g: &str| allow.iter().any(|a| a.as_ref() == g);
-        Self { print: has("print"), export: has("export"), external_links: has("external_links") }
+impl Grade {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Grade::Locked => "locked",
+            Grade::Off => "off",
+            Grade::On => "on",
+        }
     }
 }
 
-/// How the lock treats a command.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Class {
-    Allowed,
-    Blocked,
-    /// In neither table: refused, and `every_command_is_classified` fails until it is added.
-    Unclassified,
+/// Per-command switches the parent sends with an open message (`policy.overrides`): only commands
+/// changed from their default are listed. The default (also what a missing or malformed policy
+/// means) changes nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostPolicy {
+    overrides: std::collections::BTreeMap<String, bool>,
 }
 
-/// Where `id` stands.
-pub fn classify(id: &str) -> Class {
+impl HostPolicy {
+    pub fn new(overrides: impl IntoIterator<Item = (String, bool)>) -> Self {
+        Self { overrides: overrides.into_iter().collect() }
+    }
+
+    /// Whether a command of this `grade` is available: never when locked, else the override if the
+    /// parent sent one for `id`, else the grade's default.
+    pub fn allows(&self, id: &str, grade: Grade) -> bool {
+        match grade {
+            Grade::Locked => false,
+            Grade::Off | Grade::On => self.overrides.get(id).copied().unwrap_or(grade == Grade::On),
+        }
+    }
+
+    /// [`Self::allows`] for an engine command (false for an id in no table).
+    pub fn command_on(&self, id: &str) -> bool {
+        grade(id).is_some_and(|g| self.allows(id, g))
+    }
+}
+
+/// The grade of engine command `id`; `None` for one in no table (refused until it is added, and
+/// `every_command_is_classified` fails).
+pub fn grade(id: &str) -> Option<Grade> {
     if ALLOWED.contains(&id) {
-        Class::Allowed
-    } else if BLOCKED.contains(&id) {
-        Class::Blocked
+        Some(Grade::On)
+    } else if OFF.contains(&id) {
+        Some(Grade::Off)
+    } else if LOCKED.contains(&id) {
+        Some(Grade::Locked)
     } else {
-        Class::Unclassified
+        None
     }
 }
 
 /// `file.save` params that change what the parent receives: another name or format, or a password.
-/// Allowed only with the `export` group.
+/// Allowed only when Save As (`file.saveAs`) is on.
 const SAVE_PARAMS_REFUSED: [&str; 3] = ["path", "password", "format"];
 
-/// `Err` says why a locked session refuses `id` with `params` under `policy`. [`Class::Allowed`]
-/// commands pass (Save only as the plain save the parent stores, unless exporting is on), and a
-/// blocked command passes only when its policy group is on.
-pub fn check(id: &str, params: &Value, policy: HostPolicy) -> Result<(), String> {
-    match classify(id) {
-        Class::Allowed => {}
-        Class::Blocked if (policy.print && PRINT_COMMANDS.contains(&id)) || (policy.export && EXPORT_COMMANDS.contains(&id)) => {}
-        _ => return Err(format!("{id}: not available in PPM")),
+/// `Err` says why a locked session refuses `id` with `params` under `policy`: the command's grade
+/// and the parent's override decide, and Save to another name, format or password needs Save As.
+pub fn check(id: &str, params: &Value, policy: &HostPolicy) -> Result<(), String> {
+    if !policy.command_on(id) {
+        return Err(format!("{id}: not available in PPM"));
     }
     if id == "file.save"
-        && !policy.export
+        && !policy.command_on("file.saveAs")
         && let Some(p) = params.as_object()
         && SAVE_PARAMS_REFUSED.iter().any(|k| p.get(*k).is_some_and(|v| !v.is_null()))
     {
@@ -201,13 +221,13 @@ impl Session {
         self.host_lock
     }
 
-    /// Set which policy groups the parent switched on (each open message sends its own).
+    /// Set the parent's per-command switches (each open message sends its own).
     pub fn set_host_policy(&mut self, policy: HostPolicy) {
         self.host_policy = policy;
     }
 
-    pub fn host_policy(&self) -> HostPolicy {
-        self.host_policy
+    pub fn host_policy(&self) -> &HostPolicy {
+        &self.host_policy
     }
 
     /// Let the next `file.open` of exactly this document name (with bytes) through the lock: the
@@ -229,7 +249,7 @@ impl Session {
         let armed = id == "file.open"
             && self.host_open.as_deref().is_some_and(|n| params.get("path").and_then(Value::as_str) == Some(n))
             && params.get("data").is_some_and(Value::is_string);
-        if armed { Ok(()) } else { check(id, params, self.host_policy) }
+        if armed { Ok(()) } else { check(id, params, &self.host_policy) }
     }
 
     /// [`Self::host_check`] as the error [`Session::run`] returns; uses up an armed open.
@@ -260,27 +280,39 @@ mod tests {
     fn every_command_is_classified() {
         let registry = crate::cmd::registry();
         let ids: Vec<&str> = registry.all().iter().map(|c| c.id).collect();
-        let unclassified: Vec<&&str> = ids.iter().filter(|id| classify(id) == Class::Unclassified).collect();
-        assert!(unclassified.is_empty(), "classify these in host_policy.rs (ALLOWED / BLOCKED): {unclassified:?}");
-        for (name, table) in [("ALLOWED", ALLOWED), ("BLOCKED", BLOCKED)] {
+        let unclassified: Vec<&&str> = ids.iter().filter(|id| grade(id).is_none()).collect();
+        assert!(unclassified.is_empty(), "classify these in host_policy.rs (ALLOWED / OFF / LOCKED): {unclassified:?}");
+        for (name, table) in [("ALLOWED", ALLOWED), ("OFF", OFF), ("LOCKED", LOCKED)] {
             let gone: Vec<&&str> = table.iter().filter(|id| !ids.contains(id)).collect();
             assert!(gone.is_empty(), "{name} lists commands that no longer exist: {gone:?}");
         }
         let mut seen = std::collections::BTreeSet::new();
-        for id in ALLOWED.iter().chain(BLOCKED) {
+        for id in ALLOWED.iter().chain(OFF).chain(LOCKED) {
             assert!(seen.insert(*id), "{id} is in two tables or twice in one");
         }
     }
 
-    /// Drift for the policy groups: a command a group switches on is blocked, in one group only.
+    fn overrides(pairs: &[(&str, bool)]) -> HostPolicy {
+        HostPolicy::new(pairs.iter().map(|(k, v)| (k.to_string(), *v)))
+    }
+
+    /// `true` turns an off command on, `false` turns an on command off, and locked commands ignore both.
     #[test]
-    fn policy_groups_only_switch_on_blocked_commands_once() {
-        for id in PRINT_COMMANDS.iter().chain(EXPORT_COMMANDS) {
-            assert_eq!(classify(id), Class::Blocked, "{id} is in a group but not blocked");
+    fn overrides_switch_commands_by_grade() {
+        let none = HostPolicy::default();
+        for id in OFF {
+            assert!(check(id, &json!({}), &none).is_err(), "{id} is off by default");
+            assert!(check(id, &json!({}), &overrides(&[(id, true)])).is_ok(), "{id}");
+            assert!(check(id, &json!({}), &overrides(&[(id, false)])).is_err(), "{id}");
         }
-        for id in PRINT_COMMANDS {
-            assert!(!EXPORT_COMMANDS.contains(id), "{id} is in two groups");
+        assert!(check("format.bold", &json!({}), &none).is_ok());
+        assert!(check("format.bold", &json!({}), &overrides(&[("format.bold", false)])).is_err());
+        assert!(check("format.bold", &json!({}), &overrides(&[("format.bold", true)])).is_ok());
+        let all_true = HostPolicy::new(LOCKED.iter().map(|id| (id.to_string(), true)));
+        for id in LOCKED {
+            assert!(check(id, &json!({}), &all_true).is_err(), "{id} is locked");
         }
+        assert!(check("not.acommand", &json!({}), &overrides(&[("not.acommand", true)])).is_err(), "unknown ids stay refused");
     }
 
     /// Everything that opens, replaces, exports or prints the document, or loads templates,
@@ -307,32 +339,18 @@ mod tests {
             "insert.picture", "insert.textFromFile", "insert.object", "insert.spreadsheet", "picture.change", "font.loadSystem", "file.protect", "review.compare",
             "review.combine", "tools.customizeKeyboard", "tools.customizeRibbon", "developer.picture", "mailings.start", "mailings.finish", "mailings.recipients",
         ] {
-            assert!(check(id, &json!({}), HostPolicy::default()).is_ok(), "{id}");
+            assert!(check(id, &json!({}), &HostPolicy::default()).is_ok(), "{id}");
         }
     }
 
-    /// Each policy group switches on its own commands and nothing else.
+    /// Save to another name or format is Save As's: it follows that command's switch.
     #[test]
-    fn policy_groups_switch_on_their_own_commands() {
+    fn save_with_another_name_follows_save_as() {
         let none = HostPolicy::default();
-        assert_eq!(HostPolicy::from_groups::<&str>(&[]), none);
-        assert_eq!(HostPolicy::from_groups(&["nope", "macros"]), none, "unknown ids are ignored");
-        let print = HostPolicy::from_groups(&["print"]);
-        let export = HostPolicy::from_groups(&["export", "bogus"]);
-        for id in PRINT_COMMANDS {
-            assert!(check(id, &json!({}), none).is_err() && check(id, &json!({}), print).is_ok() && check(id, &json!({}), export).is_err(), "{id}");
-        }
-        for id in EXPORT_COMMANDS {
-            assert!(check(id, &json!({}), none).is_err() && check(id, &json!({}), export).is_ok() && check(id, &json!({}), print).is_err(), "{id}");
-        }
-        // Whatever the policy, these stay blocked.
-        let all = HostPolicy::from_groups(&POLICY_GROUPS);
-        for id in ["file.open", "file.new", "file.close", "file.recover", "file.autosave", "tools.macros", "tools.recordMacro", "file.newFromTemplate"] {
-            assert!(check(id, &json!({}), all).is_err(), "{id}");
-        }
-        // Save As to another name is the export group's.
-        assert!(check("file.save", &json!({"path": "other.pdf"}), none).is_err());
-        assert!(check("file.save", &json!({"path": "other.pdf"}), export).is_ok());
+        let save_as = overrides(&[("file.saveAs", true)]);
+        assert!(check("file.save", &json!({"path": "other.pdf"}), &none).is_err());
+        assert!(check("file.save", &json!({"path": "other.pdf"}), &save_as).is_ok());
+        assert!(check("file.save", &json!({}), &none).is_ok());
     }
 
     /// Editing and saving still work, and an unlocked session is untouched.
@@ -342,7 +360,7 @@ mod tests {
         s.run("text.insert", &json!({"text": "hello"})).unwrap();
         assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "hello");
         s.run("format.bold", &json!({})).unwrap();
-        let off = HostPolicy::default();
+        let off = &HostPolicy::default();
         assert!(check("file.save", &json!({}), off).is_ok());
         assert!(check("file.save", &json!({"path": null}), off).is_ok());
         assert!(check("file.save", &json!({"path": "other.pdf"}), off).is_err(), "Save keeps the parent's name");

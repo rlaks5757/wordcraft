@@ -163,8 +163,9 @@ impl WordApp {
             AfterPick::Picture | AfterPick::Recipients | AfterPick::ComparePath { .. } => true,
             #[cfg(not(target_arch = "wasm32"))]
             AfterPick::Sources => true,
-            AfterPick::SaveAs { .. } | AfterPick::Export { .. } => policy.export,
-            AfterPick::PrintPdf { .. } => policy.print,
+            AfterPick::SaveAs { .. } => policy.command_on("file.saveAs"),
+            AfterPick::Export { .. } => policy.command_on("file.exportPdf") || policy.command_on("file.exportPng"),
+            AfterPick::PrintPdf { .. } => policy.command_on("file.printPdf"),
             // Templates and the Organizer (ForDialog) bring in macros and styles from files.
             AfterPick::OpenDocument | AfterPick::Font | AfterPick::ForDialog => false,
         }

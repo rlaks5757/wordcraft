@@ -122,7 +122,7 @@ pub struct Services {
     /// parent sent.
     pub host_inbox: Option<Inbox>,
     /// Web, host mode: the policy groups the parent's last open message switched on. Taken with
-    /// the files in `host_inbox`; empty means every group off.
+    /// the files in `host_inbox`; empty means no switch changed.
     pub host_policy: Option<HostPolicySlot>,
     /// Web: pictures pasted from the browser's clipboard (the bytes; the name is ignored). Kept
     /// apart from `inbox` because a paste only lands in the document when the page is the edit
@@ -851,9 +851,9 @@ impl WordApp {
     }
 
     /// Whether links may open other sites: always outside host mode, in host mode only when the
-    /// parent's policy switched on `external_links`.
+    /// parent's policy switched on `ui.externalLinks`.
     pub fn links_allowed(&self) -> bool {
-        !self.session.is_host_locked() || self.session.host_policy().external_links
+        !self.session.is_host_locked() || host_lock::links_on(self.session.host_policy())
     }
 
     /// `Err` when the host lock refuses command `id` (engine commands by the engine's allowlist,
@@ -2403,7 +2403,7 @@ impl WordApp {
     fn drain_host_inbox(&mut self) {
         let Some(inbox) = self.services.host_inbox.clone() else { return };
         let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
-        // The policy arrives with the open message; a message without one means every group off.
+        // The policy arrives with the open message; a message without one means no switch changed.
         if !files.is_empty()
             && let Some(slot) = &self.services.host_policy
         {
@@ -7375,29 +7375,33 @@ mod tests {
         assert_eq!(object_count(&mut b), 1, "a pasted picture is inserted");
     }
 
-    /// The policy groups of the parent's open message switch on print and export, per document,
-    /// and a message without a policy switches them off again.
+    /// The overrides of the parent's open message switch commands per document (print, Save As and
+    /// links on, Bold off), and a message without a policy puts every default back.
     #[test]
     fn host_lock_policy_comes_with_the_open_message() {
         use wordcraft_engine::host_policy::HostPolicy;
+        let overrides = |pairs: &[(&str, bool)]| HostPolicy::new(pairs.iter().map(|(k, v)| (k.to_string(), *v)));
         let mut a = locked_app();
         let (host, slot) = (Inbox::default(), HostPolicySlot::default());
         a.services.host_inbox = Some(host.clone());
         a.services.host_policy = Some(slot.clone());
         let refused = |a: &mut WordApp, id: &str| a.run(id, json!({})).err().is_some_and(|e| e.contains("not available in PPM"));
         assert!(refused(&mut a, "file.saveAs") && refused(&mut a, "ui.print") && refused(&mut a, "ui.discord"));
-        *slot.lock().unwrap() = Some(HostPolicy::from_groups(&["print", "export", "external_links"]));
+        let on = [("file.print", true), ("file.saveAs", true), ("ui.externalLinks", true), ("format.bold", false), ("file.open", true), ("no.suchCommand", true)];
+        *slot.lock().unwrap() = Some(overrides(&on));
         host.lock().unwrap().push(("a.txt".into(), b"one".to_vec()));
         a.drain_host_inbox();
         assert!(!refused(&mut a, "file.saveAs") && !refused(&mut a, "ui.print") && !refused(&mut a, "ui.discord"));
         assert!(a.links_allowed());
         assert!(refused(&mut a, "file.open"), "opening stays blocked whatever the policy says");
         assert!(refused(&mut a, "tools.macros"));
+        assert!(refused(&mut a, "format.bold"), "a command the parent turned off is refused");
         // The next document comes with no policy: everything is off again.
         *slot.lock().unwrap() = Some(HostPolicy::default());
         host.lock().unwrap().push(("b.txt".into(), b"two".to_vec()));
         a.drain_host_inbox();
         assert!(refused(&mut a, "file.saveAs") && refused(&mut a, "ui.print") && !a.links_allowed());
+        assert!(!refused(&mut a, "format.bold"));
     }
 
     /// A parent document that arrives while changes are unsaved waits for the Save Changes

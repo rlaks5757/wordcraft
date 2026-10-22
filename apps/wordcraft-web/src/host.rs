@@ -4,8 +4,10 @@
 //! - `wordcraft:ready` (to the parent): `{ version }`, the app is listening; send a file now.
 //! - `wordcraft:open` (from the parent): `{ name, bytes, policy? }`, bytes an `ArrayBuffer` or
 //!   `Uint8Array`. It opens like a document picked with File › Open or dropped on the window.
-//!   `policy: { allow: ["print", "export", "external_links"] }` switches those groups on for this
-//!   document; without a valid policy they are all off.
+//!   `policy: { overrides: { "<command id>": true | false } }` switches commands for this document
+//!   (true turns on a command that is off by default, such as `file.print`, `file.saveAs` and
+//!   `ui.externalLinks`; false turns one off; locked commands ignore it). Without a valid policy
+//!   every command keeps its default.
 //! - `wordcraft:save` (to the parent): `{ name, bytes }` (a transferred `ArrayBuffer`) for every
 //!   file WordCraft would otherwise download: Save and Save As (a .docx document) and Export
 //!   (such as PDF). The parent stores it and reports failures itself.
@@ -34,8 +36,8 @@ use wordcraft_ui_egui::{HostPolicySlot, Inbox, Services, WordApp};
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
 
-/// Most group ids read from a policy.
-const MAX_POLICY_IDS: usize = 64;
+/// Most overrides read from a policy (the app has about 650 commands).
+const MAX_POLICY_IDS: usize = 1024;
 
 /// Most table requests waiting for the next frame; more are dropped.
 const MAX_PENDING_TABLES: usize = 16;
@@ -192,15 +194,19 @@ fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
     Some(m)
 }
 
-/// The groups the open message's `policy.allow` switches on. A missing or malformed policy means
-/// every group off; unknown ids are ignored.
+/// The per-command switches of the open message's `policy.overrides` (`{ "<command id>": bool }`).
+/// A missing or malformed policy changes nothing; entries whose value is not a boolean are skipped,
+/// and ids that are no command do nothing.
 fn policy(data: &JsValue) -> HostPolicy {
     let get = |from: &JsValue, key: &str| js_sys::Reflect::get(from, &JsValue::from_str(key)).ok();
-    let Some(allow) = get(data, "policy").and_then(|p| get(&p, "allow")).filter(|a| js_sys::Array::is_array(a)) else {
+    let Some(overrides) = get(data, "policy").and_then(|p| get(&p, "overrides")).filter(|o| o.is_object() && !js_sys::Array::is_array(o)) else {
         return HostPolicy::default();
     };
-    let ids: Vec<String> = js_sys::Array::from(&allow).iter().take(MAX_POLICY_IDS).filter_map(|v| v.as_string()).collect();
-    HostPolicy::from_groups(&ids)
+    let entries = js_sys::Object::entries(&js_sys::Object::from(overrides));
+    HostPolicy::new(entries.iter().take(MAX_POLICY_IDS).filter_map(|e| {
+        let pair = js_sys::Array::from(&e);
+        Some((pair.get(0).as_string()?, pair.get(1).as_bool()?))
+    }))
 }
 
 fn string(data: &JsValue, key: &str) -> Option<String> {

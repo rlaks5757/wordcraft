@@ -18,3 +18,6 @@ esac
 # OFL-1.1 §2: the license travels with the embedded font.
 mkdir -p "$root/dist/web/licenses"
 cp "$root/ppm/fonts-ko/fonts/nanum-gothic/OFL.txt" "$root/dist/web/licenses/NanumGothic-OFL.txt"
+# 관리자 화면이 읽는 명령 목록(id, 이름, 메뉴 위치, 등급). 잠금 표에서 만들어 표와 어긋나지 않는다.
+cd "$root"
+cargo run -q -p wordcraft-ui-egui --example commands_json > "$root/dist/web/commands.json"
