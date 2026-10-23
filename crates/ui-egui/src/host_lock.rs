@@ -49,15 +49,17 @@ fn policy_id(id: &str) -> &str {
 /// Reference-manager commands (`ui.zotero.*`): the desktop app talks to a program on the user's machine.
 const BLOCKED_UI_PREFIXES: &[&str] = &["ui.zotero."];
 
-/// Dialogs behind locked commands: the rename dialog (the parent names the document). `ui.dialog`
+/// Dialogs behind locked commands: the rename dialog (the parent names the document) and the
+/// password dialog. `ui.dialog`
 /// with one of these names opens nothing.
-pub const BLOCKED_DIALOGS: &[&str] = &["renameDocument"];
+pub const BLOCKED_DIALOGS: &[&str] = &["encryptPassword", "renameDocument"];
 
-/// Whether a host-locked app shows Backstage page `page`: Info, Save and Options always; Print and
+/// Whether a host-locked app shows Backstage page `page`: Save and Options always (Info never: it
+/// has the file properties and password protection); Print and
 /// Save As / Export only when the policy has the command behind them on.
 pub fn backstage_page_allowed(page: &str, policy: &HostPolicy) -> bool {
     match page {
-        "info" | "save" | "options" => true,
+        "save" | "options" => true,
         "print" => policy.command_on("file.print"),
         "saveAs" => policy.command_on("file.saveAs"),
         "export" => policy.command_on("file.exportPdf") || policy.command_on("file.exportPng"),
@@ -195,7 +197,8 @@ mod tests {
         assert!(check_ui("ui.changePicture", &json!({}), off).is_ok());
         assert!(check_ui("ui.backstage", &json!({"page": "open"}), off).is_err());
         assert!(check_ui("ui.backstage", &json!({"page": "print"}), off).is_err());
-        assert!(check_ui("ui.backstage", &json!({"page": "info"}), off).is_ok());
+        assert!(check_ui("ui.backstage", &json!({"page": "info"}), off).is_err());
+        assert!(check_ui("ui.backstage", &json!({"page": "options"}), off).is_ok());
         assert!(check_ui("ui.backstage", &json!({"value": false}), off).is_ok());
     }
 

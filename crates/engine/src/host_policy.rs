@@ -117,19 +117,19 @@ const ALLOWED: &[&str] = &[
 /// There is no revert command in WordCraft (the registry has none), so none is listed here.
 ///
 /// Commands no policy turns on: they open, create, close or replace the document, keep copies of
-/// it, load templates, macros or font files, or open other windows.
+/// it, load templates, macros or font files, open other windows, or put a password on it
+/// (`file.encrypt`, which also removes one: a password set here is applied by the next plain Save,
+/// so an editor could lock the parent's copy for everyone else).
 #[rustfmt::skip]
 const LOCKED: &[&str] = &[
-    "file.autosave", "file.close", "file.new", "file.newFromTemplate", "file.open", "file.recover", "file.rename", "file.share", "file.versions",
+    "file.autosave", "file.close", "file.encrypt", "file.new", "file.newFromTemplate", "file.open", "file.recover", "file.rename", "file.share", "file.versions",
     "tools.macros", "tools.recordMacro", "view.newWindow",
 ];
 
-/// Commands that are off until the parent's policy turns them on: printing, Save As and export,
-/// and password encryption (a password set here is applied by the next plain Save, so an editor
-/// could lock the parent's copy for everyone else).
+/// Commands that are off until the parent's policy turns them on: printing, Save As and export.
 #[rustfmt::skip]
 const OFF: &[&str] = &[
-    "file.encrypt", "file.exportPdf", "file.exportPng", "file.print", "file.printMarkup", "file.printPdf", "file.saveAs", "file.saveTemplate",
+    "file.exportPdf", "file.exportPng", "file.print", "file.printMarkup", "file.printPdf", "file.saveAs", "file.saveTemplate",
 ];
 
 /// Whether a command can be turned on or off by the parent's policy.
@@ -224,6 +224,10 @@ pub const NOT_AVAILABLE: &str = "PPM에서는 사용할 수 없습니다";
 pub fn check(id: &str, params: &Value, policy: &HostPolicy) -> Result<(), String> {
     if !policy.command_on(id) {
         return Err(NOT_AVAILABLE.to_string());
+    }
+    // A password on a save is `file.encrypt` by another route: locked, whatever Save As is set to.
+    if matches!(id, "file.save" | "file.saveAs") && params.get("password").is_some_and(|v| !v.is_null()) {
+        return Err("PPM에서는 문서를 다른 이름, 형식, 암호로 저장할 수 없습니다".to_string());
     }
     if id == "file.save"
         && !policy.command_on("file.saveAs")
@@ -390,17 +394,21 @@ mod tests {
         assert_eq!(HostPolicy::from_entries(many).overrides.len(), MAX_OVERRIDES);
     }
 
-    /// Encrypting is off by default: a password set there would be applied by the next plain
-    /// Save and lock the parent's copy; the parent can still turn it on.
+    /// Encrypting is locked: a password set there would be applied by the next plain Save and
+    /// lock the parent's copy; no policy turns it on, and removing a password is refused too.
     #[test]
-    fn encrypting_is_off_until_the_parent_turns_it_on() {
+    fn encrypting_is_locked_for_every_policy() {
         let mut s = locked();
         let r = s.run("file.encrypt", &json!({"password": "secret"}));
         assert!(matches!(r, Err(CmdError::Disabled(_))), "{r:?}");
         assert!(s.password.is_none());
         s.set_host_policy(overrides(&[("file.encrypt", true)]));
-        s.run("file.encrypt", &json!({"password": "secret"})).unwrap();
-        assert!(s.password.is_some());
+        let r = s.run("file.encrypt", &json!({"password": "secret"}));
+        assert!(matches!(r, Err(CmdError::Disabled(_))), "{r:?}");
+        let r = s.run("file.encrypt", &json!({"password": null}));
+        assert!(matches!(r, Err(CmdError::Disabled(_))), "{r:?}");
+        assert!(s.password.is_none());
+        assert_eq!(grade("file.encrypt"), Some(Grade::Locked));
     }
 
     /// Save to another name or format is Save As's: it follows that command's switch.
@@ -411,6 +419,11 @@ mod tests {
         assert!(check("file.save", &json!({"path": "other.pdf"}), &none).is_err());
         assert!(check("file.save", &json!({"path": "other.pdf"}), &save_as).is_ok());
         assert!(check("file.save", &json!({}), &none).is_ok());
+        // A password is never allowed, even with Save As on.
+        for id in ["file.save", "file.saveAs"] {
+            assert!(check(id, &json!({"path": "a.docx", "password": "x"}), &save_as).is_err(), "{id}");
+        }
+        assert!(check("file.saveAs", &json!({"path": "a.docx", "password": null}), &save_as).is_ok());
     }
 
     /// Editing and saving still work, and an unlocked session is untouched.

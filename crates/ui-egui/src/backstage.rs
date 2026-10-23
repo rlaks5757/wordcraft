@@ -7,11 +7,10 @@ use crate::theme::{APP_COLOR, Tokens, medium, regular, semibold};
 use crate::{WordApp, icons};
 
 /// The side menu: page id, label and icon (#1714).
-const PAGES: [(&str, &str, &str); 11] = [
+const PAGES: [(&str, &str, &str); 10] = [
     ("home", "Home", "homeFolder"),
     ("new", "New", "blankPage"),
     ("open", "Open", "open"),
-    ("info", "Info", "info"),
     ("recover", "Recover", "recover"),
     ("save", "Save", "save"),
     ("saveAs", "Save As", "saveAs"),
@@ -37,9 +36,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if !has_document && !works_without_document(&app.ui.backstage_page) {
         app.ui.backstage_page = "home".into();
     }
-    // Host mode: the pages that open, create or export files don't exist; land on Info.
+    // Host mode: the pages that open, create or export files and Info don't exist; land on Options.
     if app.host_locked() && !crate::host_lock::backstage_page_allowed(&app.ui.backstage_page, app.session.host_policy()) {
-        app.ui.backstage_page = "info".into();
+        app.ui.backstage_page = "options".into();
     }
     let mac = app.integrated_titlebar;
     egui::Panel::left("backstage_nav")
@@ -121,7 +120,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 app.ui.backstage = false;
                                 app.canvas.want_focus = true;
                             } else {
-                                app.ui.backstage_page = if app.host_locked() && !crate::host_lock::backstage_page_allowed("saveAs", app.session.host_policy()) { "info" } else { "saveAs" }.into();
+                                app.ui.backstage_page = if app.host_locked() && !crate::host_lock::backstage_page_allowed("saveAs", app.session.host_policy()) { "options" } else { "saveAs" }.into();
                             }
                         }
                         "saveAs" => {

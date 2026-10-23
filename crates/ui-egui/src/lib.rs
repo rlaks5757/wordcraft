@@ -7599,7 +7599,8 @@ mod tests {
         }
         assert!(a.run("ui.dialog", json!({"name": "renameDocument"})).is_err());
         assert!(a.run("ui.backstage", json!({"value": true, "page": "open"})).is_err());
-        assert!(a.run("ui.backstage", json!({"value": true, "page": "info"})).is_ok());
+        assert!(a.run("ui.backstage", json!({"value": true, "page": "info"})).is_err(), "Info is hidden in PPM");
+        assert!(a.run("ui.backstage", json!({"value": true, "page": "options"})).is_ok());
         assert!(matches!(
             a.ask_file(file_dialogs::FileDialogRequest::Open { purpose: "document".into() }, file_dialogs::AfterPick::OpenDocument),
             file_dialogs::Asked::Done(Err(_))
