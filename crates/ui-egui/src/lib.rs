@@ -7659,6 +7659,9 @@ mod tests {
             );
             h.run_steps(4);
             assert_eq!(width.get() > 1.0, !locked, "Restrict Editing button (locked: {locked})");
+            // The Review ▸ Protect group is drawn only while one of its commands is allowed.
+            let shown = ["review.blockAuthors", "review.restrict"].iter().any(|id| h.state().host_refusal(id, &json!({})).is_ok());
+            assert_eq!(shown, !locked, "Protect group (locked: {locked})");
             h.state_mut().run("ui.backstage", json!({"value": true, "page": "options"})).unwrap();
             h.run_steps(6);
             let nav = |h: &egui_kittest::Harness<'_, WordApp>, l: &str| h.query_by_role_and_label(egui::accesskit::Role::Button, l).is_some();

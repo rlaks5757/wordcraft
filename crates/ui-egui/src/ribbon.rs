@@ -2051,10 +2051,13 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Compare", None, app, |ui, app| {
         big(ui, app, "compare", "Compare", "review.compare", json!({}), false);
     });
-    group(ui, "Protect", None, app, |ui, app| {
+    // In the host-locked build both commands are refused; a group with nothing left isn't drawn.
+    if ["review.blockAuthors", "review.restrict"].iter().any(|id| app.host_refusal(id, &json!({})).is_ok()) {
+        group(ui, "Protect", None, app, |ui, app| {
         big(ui, app, "blockAuthors", "Block\nAuthors", "review.blockAuthors", json!({}), false);
         big(ui, app, "restrict", "Restrict\nEditing", "review.restrict", json!({}), false);
-    });
+        });
+    }
     group(ui, "Ink", None, app, |ui, app| {
         let hidden = app.session.view.hide_ink;
         big_toggle(ui, app, "hideInk", "Hide\nInk", "review.hideInk", hidden);
