@@ -8,6 +8,10 @@ description = "WordCraft fonts: font database (bundled OFL + system), metrics, g
 [lints]
 workspace = true
 
+[features]
+# The PPM build's Office/Korean name mapping onto the bundled set (`wordcraft-web/ppm-host`).
+ppm-host = []
+
 [dependencies]
 kurbo = { workspace = true }
 skrifa = { workspace = true }

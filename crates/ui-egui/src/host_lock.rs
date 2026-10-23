@@ -49,10 +49,9 @@ fn policy_id(id: &str) -> &str {
 /// Reference-manager commands (`ui.zotero.*`): the desktop app talks to a program on the user's machine.
 const BLOCKED_UI_PREFIXES: &[&str] = &["ui.zotero."];
 
-/// Dialogs behind locked commands: the rename dialog (the parent names the document) and the
-/// password dialog. `ui.dialog`
-/// with one of these names opens nothing.
-pub const BLOCKED_DIALOGS: &[&str] = &["encryptPassword", "renameDocument"];
+/// Dialogs behind locked commands: the rename dialog (the parent names the document), the
+/// password dialog and the Restrict Editing pane. `ui.dialog` with one of these names opens nothing.
+pub const BLOCKED_DIALOGS: &[&str] = &["encryptPassword", "renameDocument", "restrictEditing"];
 
 /// Whether a host-locked app shows Backstage page `page`: Save and Options always (Info never: it
 /// has the file properties and password protection); Print and
@@ -132,7 +131,7 @@ pub fn commands_json() -> Value {
         })
         .collect();
     list.push(serde_json::json!({
-        "id": EXTERNAL_LINKS, "label": "External links", "labelKo": "외부 링크", "location": ["File", "Info"], "grades": {"builder": "off"},
+        "id": EXTERNAL_LINKS, "label": "External links", "labelKo": "외부 링크", "location": ["Help"], "grades": {"builder": "off"},
     }));
     serde_json::json!({"app": "word", "schema": 1, "commands": list})
 }

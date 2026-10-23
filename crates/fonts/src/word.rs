@@ -21,6 +21,36 @@ pub struct Resolved {
     pub substituted: bool,
 }
 
+/// The PPM build's name mapping (`ppm/font_mapping`): Office and Korean document fonts map onto the
+/// bundled Office-compatible set, matched case-insensitively against an exact list. Other names
+/// keep the common chains below (symbol fonts, Palatino, Arial Unicode MS…), which end in Carlito
+/// for a sans name; Hangul glyphs reach NanumGothic through the per-glyph fallback.
+#[cfg(feature = "ppm-host")]
+fn ppm_office_chain(f: &str) -> Option<&'static [&'static str]> {
+    const CARLITO: &[&str] = &["Carlito", "Liberation Sans", "Source Sans 3"];
+    const CALADEA: &[&str] = &["Caladea", "Carlito", "Source Sans 3"];
+    const SANS: &[&str] = &["Liberation Sans", "Carlito", "Source Sans 3"];
+    const SERIF: &[&str] = &["Liberation Serif", "Carlito", "Source Sans 3"];
+    const MONO: &[&str] = &["Liberation Mono", "Carlito", "Source Sans 3"];
+    const KOREAN: &[&str] = &["NanumGothic", "Carlito", "Liberation Sans", "Source Sans 3"];
+    const INTER: &[&str] = &["Inter", "Carlito", "Source Sans 3"];
+    Some(match f {
+        "calibri" | "calibri light" | "aptos" | "aptos display" | "aptos narrow" | "aptos light" | "aptos semibold" | "segoe ui"
+        | "segoe ui light" | "segoe ui semibold" | "segoe ui semilight" => CARLITO,
+        "cambria" => CALADEA,
+        // Arial and Helvetica already lead with Liberation Sans in the common chain.
+        "helvetica neue" => SANS,
+        "times" | "times new roman" => SERIF,
+        "courier" | "courier new" | "consolas" => MONO,
+        "inter" => INTER,
+        "맑은 고딕" | "malgun gothic" | "굴림" | "gulim" | "굴림체" | "gulimche" | "새굴림" | "new gulim" | "돋움" | "dotum" | "돋움체"
+        | "dotumche" | "바탕" | "batang" | "바탕체" | "batangche" | "궁서" | "gungsuh" | "궁서체" | "gungsuhche" | "함초롬바탕"
+        | "hcr batang" | "함초롬돋움" | "hcr dotum" | "나눔고딕" | "nanumgothic" | "나눔명조" | "nanummyeongjo" | "noto sans kr"
+        | "noto sans cjk kr" | "noto serif kr" | "apple sd gothic neo" => KOREAN,
+        _ => return None,
+    })
+}
+
 /// Substitutes to try, in order, for a family that isn't installed. Open fonts that are
 /// metric-compatible come first (Carlito ↔ Calibri, Caladea ↔ Cambria, Liberation ↔ Arial /
 /// Times New Roman / Courier New), then common system fonts, then our bundled families.
@@ -31,10 +61,6 @@ fn substitutes(family: &str) -> &'static [&'static str] {
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
-    // Korean document fonts: the bundled NanumGothic (the PPM build's only Hangul face), then the
-    // plain sans chain, so a build without it substitutes as it did before.
-    const KOREAN: &[&str] =
-        &["NanumGothic", "Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
     // Word's symbol fonts (Symbol, Wingdings…) are proprietary: their characters are drawn as their
     // Unicode equivalents (`wordcraft_doc::symbol_fonts`) from these faces or any face that has them.
     const SYMBOL: &[&str] = &["Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols", "Noto Sans Symbols 2", "Source Sans 3"];
@@ -106,8 +132,11 @@ fn substitutes(family: &str) -> &'static [&'static str] {
     if is_persian_sans(&f) {
         return ARABIC_SANS;
     }
+    #[cfg(feature = "ppm-host")]
+    if let Some(chain) = ppm_office_chain(&f) {
+        return chain;
+    }
     match f.as_str() {
-        "맑은 고딕" | "malgun gothic" | "굴림" | "gulim" | "돋움" | "dotum" | "바탕" | "batang" | "궁서" | "gungsuh" | "nanumgothic" | "nanum gothic" => KOREAN,
         "palatino linotype" | "book antiqua" | "palatino" => PALATINO,
         "arial" | "helvetica" | "arial nova" => ARIAL,
         "arial unicode ms" => ARIAL_UNICODE,
@@ -412,55 +441,82 @@ mod tests {
         assert_eq!(hhea_line(1000, i16::MIN, 0), (1000.0, 32768.0));
     }
 
+    /// The PPM name mapping: the exact list (`font_mapping_canonical.md`), case-insensitive; any
+    /// other name is Carlito.
+    #[cfg(feature = "ppm-host")]
     #[test]
     fn office_names_map_to_the_office_compatible_set() {
         let first = |f: &str| substitutes(f)[0];
-        for f in ["Calibri", "Calibri Light", "Aptos", "Aptos Display", "Aptos Narrow", "Some Unknown Font"] {
+        for f in [
+            "Calibri", "calibri light", "Aptos", "Aptos Display", "Aptos Narrow", "Aptos Light", "Aptos SemiBold", "Segoe UI", "Segoe UI Light",
+            "Segoe UI Semibold", "Segoe UI Semilight", "Some Unknown Font", "Arial Narrow",
+        ] {
             assert_eq!(first(f), "Carlito", "{f}");
         }
         assert_eq!(first("Cambria"), "Caladea");
-        for f in ["Arial", "Helvetica"] {
+        for f in ["Arial", "ARIAL", "Helvetica", "Helvetica Neue"] {
             assert_eq!(first(f), "Liberation Sans", "{f}");
         }
         for f in ["Times New Roman", "Times"] {
             assert_eq!(first(f), "Liberation Serif", "{f}");
         }
-        // Courier New and Consolas come before Liberation Mono only by being uninstalled names.
         for f in ["Courier New", "Consolas", "Courier"] {
-            assert!(substitutes(f).contains(&"Liberation Mono"), "{f}");
+            assert_eq!(first(f), "Liberation Mono", "{f}");
         }
-        for f in ["맑은 고딕", "Malgun Gothic", "굴림", "Gulim", "돋움", "Dotum", "바탕", "Batang", "궁서", "Gungsuh", "NanumGothic"] {
+        assert_eq!(first("Inter"), "Inter");
+        for f in [
+            "맑은 고딕", "Malgun Gothic", "굴림", "Gulim", "굴림체", "GulimChe", "새굴림", "New Gulim", "돋움", "Dotum", "돋움체", "DotumChe",
+            "바탕", "Batang", "바탕체", "BatangChe", "궁서", "Gungsuh", "궁서체", "GungsuhChe", "함초롬바탕", "HCR Batang", "함초롬돋움",
+            "HCR Dotum", "나눔고딕", "NanumGothic", "나눔명조", "NanumMyeongjo", "Noto Sans KR", "Noto Sans CJK KR", "Noto Serif KR",
+            "Apple SD Gothic Neo",
+        ] {
             assert_eq!(first(f), "NanumGothic", "{f}");
-            assert!(substitutes(f).contains(&"Carlito"), "{f} keeps the sans chain");
+            assert!(substitutes(f).contains(&"Carlito"), "{f} keeps a Latin fallback");
         }
     }
 
-    /// With the PPM font set embedded (`CRAFT_FONTS_DIR=ppm/fonts-ko`), the document font names land on
-    /// the bundled faces; without it there is nothing to check.
+    /// Other builds keep the old chains: the Korean names are not special there.
+    #[cfg(not(feature = "ppm-host"))]
+    #[test]
+    fn non_ppm_builds_keep_the_old_chains() {
+        assert!(!substitutes("맑은 고딕").contains(&"NanumGothic"));
+        assert_eq!(substitutes("Arial")[0], "Liberation Sans");
+        assert_eq!(substitutes("Segoe UI")[0], "Carlito");
+    }
+
+    /// The PPM font set (`CRAFT_FONTS_DIR=ppm/fonts-ko`) serves the document fonts. A `ppm-host` build
+    /// with the set configured must have it; only a build without the directory skips.
+    #[cfg(feature = "ppm-host")]
     #[test]
     fn bundled_office_set_serves_the_document_fonts() {
         let db = FontDb::with_font_dirs(vec![]);
-        if !db.has_family("Carlito") {
-            eprintln!("skipped: built without the PPM font set (CRAFT_FONTS_DIR)");
+        if option_env!("CRAFT_FONTS_DIR").is_none() {
+            eprintln!("skipped: CRAFT_FONTS_DIR was not set at build time");
             return;
         }
         let want = [
             ("Calibri", "Carlito"),
             ("Aptos Narrow", "Carlito"),
+            ("Segoe UI", "Carlito"),
             ("Unknown Sans", "Carlito"),
             ("Cambria", "Caladea"),
             ("Arial", "Liberation Sans"),
             ("Times New Roman", "Liberation Serif"),
             ("Consolas", "Liberation Mono"),
             ("맑은 고딕", "NanumGothic"),
+            ("굴림체", "NanumGothic"),
+            ("나눔고딕", "NanumGothic"),
         ];
         for (name, family) in want {
+            assert!(db.has_family(family), "{family} is not bundled");
             assert_eq!(substitute(&db, name), Some(family), "{name}");
-            assert!(db.has_family(family), "{family}");
         }
-        for style in ["Regular", "Bold", "Italic", "Bold Italic"] {
-            assert_eq!(db.face("Carlito", style).family, "Carlito", "{style}");
-            assert_eq!(db.face("Liberation Mono", style).family, "Liberation Mono", "{style}");
+        for family in ["Carlito", "Caladea", "Liberation Sans", "Liberation Serif", "Liberation Mono"] {
+            for (style, bold, italic) in [("Regular", false, false), ("Bold", true, false), ("Italic", false, true), ("Bold Italic", true, true)] {
+                let f = db.face(family, style);
+                assert_eq!(f.family, family, "{family} {style}");
+                assert_eq!((f.weight >= 600.0, f.italic), (bold, italic), "{family} {style}");
+            }
         }
     }
 

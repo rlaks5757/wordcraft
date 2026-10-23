@@ -44,8 +44,8 @@ const ALLOWED: &[&str] = &[
     "equation.enter", "equation.exit", "equation.gallery", "equation.get", "equation.inputFormat", "equation.insertStructure",
     "equation.insertSymbol", "equation.justify", "equation.move", "equation.normalText", "equation.number", "equation.set", "equation.structure",
     "equation.structureActions", "equation.type", "fields.lock", "fields.next", "fields.previous", "fields.selected", "fields.setCode",
-    "fields.toggleCode", "fields.unlink", "fields.unlock", "file.accessibility", "file.compatibility", "file.info", "file.inspect", "file.options",
-    "file.privacy", "file.privacyOptions", "file.properties", "file.protect", "file.save", "file.setAuthor", "font.add", "font.list", "font.loadSystem", "font.remove",
+    "fields.toggleCode", "fields.unlink", "fields.unlock", "file.accessibility", "file.compatibility", "file.inspect", "file.options",
+    "file.privacy", "file.privacyOptions", "file.save", "file.setAuthor", "font.add", "font.list", "font.loadSystem", "font.remove",
     "format.allCaps", "format.bold", "format.border", "format.changeCase", "format.charStyle", "format.clear", "format.color",
     "format.doubleStrikethrough", "format.doubleUnderline", "format.emboss", "format.enclose", "format.engrave", "format.font", "format.fontDialog",
     "format.growFont", "format.growFont1", "format.hidden", "format.highlight", "format.italic", "format.outline", "format.phonetic",
@@ -87,7 +87,7 @@ const ALLOWED: &[&str] = &[
     "review.combine", "review.comments", "review.compare", "review.deleteComment", "review.editComment", "review.editor", "review.hideInk",
     "review.ignoreAll", "review.issues", "review.language", "review.markup", "review.newComment", "review.nextChange", "review.nextComment",
     "review.previousChange", "review.previousComment", "review.proofing", "review.readAloud", "review.reject", "review.rejectAll", "review.reply",
-    "review.resolveComment", "review.restrict", "review.showMarkup", "review.spelling", "review.suggestions", "review.thesaurus",
+    "review.resolveComment", "review.showMarkup", "review.spelling", "review.suggestions", "review.thesaurus",
     "review.trackChanges", "review.trackingOptions", "review.wordCount", "select.addObject", "select.all", "select.collapse", "select.column",
     "select.dragUnit", "select.extend", "select.line", "select.objects", "select.paragraph", "select.range", "select.sentence", "select.similar",
     "select.text", "select.word", "shape.alignText", "shape.breakLink", "shape.change", "shape.connect", "shape.effects", "shape.fill", "shape.link",
@@ -117,13 +117,15 @@ const ALLOWED: &[&str] = &[
 /// There is no revert command in WordCraft (the registry has none), so none is listed here.
 ///
 /// Commands no policy turns on: they open, create, close or replace the document, keep copies of
-/// it, load templates, macros or font files, open other windows, or put a password on it
-/// (`file.encrypt`, which also removes one: a password set here is applied by the next plain Save,
-/// so an editor could lock the parent's copy for everyone else).
+/// it, load templates, macros or font files, open other windows, or put a password or an editing
+/// restriction on it. `file.encrypt` also removes a password: one set here is applied by the next
+/// plain Save, so an editor could lock the parent's copy for everyone else. `review.restrict` and
+/// `file.protect` (which runs it) would do the same with read-only / forms protection; `file.info`
+/// and `file.properties` belong to the Info page, which is hidden.
 #[rustfmt::skip]
 const LOCKED: &[&str] = &[
-    "file.autosave", "file.close", "file.encrypt", "file.new", "file.newFromTemplate", "file.open", "file.recover", "file.rename", "file.share", "file.versions",
-    "tools.macros", "tools.recordMacro", "view.newWindow",
+    "file.autosave", "file.close", "file.encrypt", "file.info", "file.new", "file.newFromTemplate", "file.open", "file.properties", "file.protect", "file.recover", "file.rename", "file.share", "file.versions",
+    "review.restrict", "tools.macros", "tools.recordMacro", "view.newWindow",
 ];
 
 /// Commands that are off until the parent's policy turns them on: printing, Save As and export.
@@ -212,9 +214,9 @@ pub fn grade(id: &str) -> Option<Grade> {
     }
 }
 
-/// `file.save` params that change what the parent receives: another name or format, or a password.
-/// Allowed only when Save As (`file.saveAs`) is on.
-const SAVE_PARAMS_REFUSED: [&str; 3] = ["path", "password", "format"];
+/// `file.save` params that change what the parent receives: another name or format. Allowed only
+/// when Save As (`file.saveAs`) is on. A `password` is refused whatever the policy ([`check`]).
+const SAVE_PARAMS_REFUSED: [&str; 2] = ["path", "format"];
 
 /// What a refusal says (the PPM interface is Korean): the command or page is switched off for the parent.
 pub const NOT_AVAILABLE: &str = "PPM에서는 사용할 수 없습니다";
@@ -369,7 +371,7 @@ mod tests {
     #[test]
     fn edits_into_the_document_are_allowed() {
         for id in [
-            "insert.picture", "insert.textFromFile", "insert.object", "insert.spreadsheet", "picture.change", "font.loadSystem", "font.add", "font.remove", "file.protect", "review.compare",
+            "insert.picture", "insert.textFromFile", "insert.object", "insert.spreadsheet", "picture.change", "font.loadSystem", "font.add", "font.remove", "review.compare",
             "review.combine", "tools.customizeKeyboard", "tools.customizeRibbon", "developer.picture", "tools.attachTemplate", "tools.detachTemplate", "tools.linkStyles", "tools.updateStyles", "tools.templates", "mailings.start", "mailings.finish", "mailings.recipients",
         ] {
             assert!(check(id, &json!({}), &HostPolicy::default()).is_ok(), "{id}");
@@ -409,6 +411,30 @@ mod tests {
         assert!(matches!(r, Err(CmdError::Disabled(_))), "{r:?}");
         assert!(s.password.is_none());
         assert_eq!(grade("file.encrypt"), Some(Grade::Locked));
+    }
+
+    /// Restrict Editing (and Protect Document, which runs it) is locked: a read-only or forms
+    /// protection set here would lock the parent's copy for everyone else. Nothing changes.
+    #[test]
+    fn restricting_editing_is_locked_for_every_policy() {
+        let mut s = locked();
+        for pol in [HostPolicy::default(), overrides(&[("review.restrict", true), ("file.protect", true)])] {
+            s.set_host_policy(pol);
+            for (id, params) in [
+                ("review.restrict", json!({"mode": "readOnly"})),
+                ("review.restrict", json!({"mode": "forms", "password": "pw"})),
+                ("review.restrict", json!({"exception": "add"})),
+                ("review.restrict", json!({"stop": true})),
+                ("file.protect", json!({"mode": "readOnly"})),
+            ] {
+                let r = s.run(id, &params);
+                assert!(matches!(r, Err(CmdError::Disabled(_))), "{id} {params}: {r:?}");
+            }
+            assert!(s.doc.settings.protection.is_none(), "{:?}", s.doc.settings.protection);
+        }
+        for id in ["review.restrict", "file.protect", "file.info", "file.properties"] {
+            assert_eq!(grade(id), Some(Grade::Locked), "{id}");
+        }
     }
 
     /// Save to another name or format is Save As's: it follows that command's switch.

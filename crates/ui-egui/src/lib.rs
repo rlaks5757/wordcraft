@@ -7598,6 +7598,17 @@ mod tests {
             assert!(a.run(id, json!({})).is_err(), "{id} is refused");
         }
         assert!(a.run("ui.dialog", json!({"name": "renameDocument"})).is_err());
+        // The password dialog and the Restrict Editing pane are closed too, by name and by command.
+        for name in ["encryptPassword", "restrictEditing"] {
+            assert!(a.run("ui.dialog", json!({"name": name})).is_err(), "{name}");
+            assert!(dialogs::Dialog::open(name, &mut a).is_none() || a.run("ui.dialog", json!({"name": name})).is_err(), "{name}");
+        }
+        for id in ["review.restrict", "file.protect", "file.encrypt", "file.properties", "file.info"] {
+            assert!(a.run(id, json!({})).is_err(), "{id} is refused");
+            assert!(a.run(id, json!({"mode": "readOnly", "password": "x"})).is_err(), "{id} with settings is refused");
+            assert!(a.execute(id, json!({})).is_err(), "{id} is refused by execute");
+        }
+        assert!(!a.restrict.open && a.dialog.is_none() && a.session.doc.settings.protection.is_none());
         assert!(a.run("ui.backstage", json!({"value": true, "page": "open"})).is_err());
         assert!(a.run("ui.backstage", json!({"value": true, "page": "info"})).is_err(), "Info is hidden in PPM");
         assert!(a.run("ui.backstage", json!({"value": true, "page": "options"})).is_ok());
@@ -7622,6 +7633,38 @@ mod tests {
         let mut free = app();
         assert!(free.host_refusal("file.saveAs", &Value::Null).is_ok());
         assert!(free.run("ui.backstage", json!({"value": true, "page": "open"})).is_ok());
+    }
+
+    /// Host mode hides the entries of the blocked features: the Restrict Editing button (as the
+    /// Review ribbon draws it, by `widgets::big`) takes no room, and Info is missing from the
+    /// File tab's navigation; an unlocked app shows both.
+    #[test]
+    fn host_lock_hides_restrict_editing_and_info() {
+        use egui_kittest::kittest::Queryable;
+        for locked in [true, false] {
+            let mut a = app();
+            if locked {
+                a.session.lock_to_host();
+            }
+            let width = std::cell::Cell::new(-1.0_f32);
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                    let r = widgets::big(ui, app, "restrict", "Restrict\nEditing", "review.restrict", json!({}), false);
+                    width.set(r.rect.width());
+                },
+                a,
+            );
+            h.run_steps(4);
+            assert_eq!(width.get() > 1.0, !locked, "Restrict Editing button (locked: {locked})");
+            h.state_mut().run("ui.backstage", json!({"value": true, "page": "options"})).unwrap();
+            h.run_steps(6);
+            let nav = |h: &egui_kittest::Harness<'_, WordApp>, l: &str| h.query_by_role_and_label(egui::accesskit::Role::Button, l).is_some();
+            assert!(nav(&h, "Options"), "the nav is shown");
+            assert_eq!(nav(&h, "Info"), !locked, "Info nav item (locked: {locked})");
+        }
     }
 
     /// With a Drawing Canvas selected, every image of the drop goes into it (#1592).
