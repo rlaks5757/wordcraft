@@ -37,11 +37,11 @@ fn ppm_office_chain(f: &str) -> Option<&'static [&'static str]> {
     Some(match f {
         "calibri" | "calibri light" | "aptos" | "aptos display" | "aptos narrow" | "aptos light" | "aptos semibold" | "segoe ui"
         | "segoe ui light" | "segoe ui semibold" | "segoe ui semilight" => CARLITO,
-        "cambria" => CALADEA,
+        "cambria" | "constantia" | "palatino" | "palatino linotype" | "book antiqua" | "georgia" | "garamond" => CALADEA,
         // Arial and Helvetica already lead with Liberation Sans in the common chain.
-        "helvetica neue" => SANS,
+        "arial narrow" | "helvetica neue" => SANS,
         "times" | "times new roman" => SERIF,
-        "courier" | "courier new" | "consolas" => MONO,
+        "courier" | "courier new" | "consolas" | "lucida console" => MONO,
         "inter" => INTER,
         "맑은 고딕" | "malgun gothic" | "굴림" | "gulim" | "굴림체" | "gulimche" | "새굴림" | "new gulim" | "돋움" | "dotum" | "돋움체"
         | "dotumche" | "바탕" | "batang" | "바탕체" | "batangche" | "궁서" | "gungsuh" | "궁서체" | "gungsuhche" | "함초롬바탕"
@@ -449,18 +449,20 @@ mod tests {
         let first = |f: &str| substitutes(f)[0];
         for f in [
             "Calibri", "calibri light", "Aptos", "Aptos Display", "Aptos Narrow", "Aptos Light", "Aptos SemiBold", "Segoe UI", "Segoe UI Light",
-            "Segoe UI Semibold", "Segoe UI Semilight", "Some Unknown Font", "Arial Narrow",
+            "Segoe UI Semibold", "Segoe UI Semilight", "Some Unknown Font", "Arial Black",
         ] {
             assert_eq!(first(f), "Carlito", "{f}");
         }
-        assert_eq!(first("Cambria"), "Caladea");
-        for f in ["Arial", "ARIAL", "Helvetica", "Helvetica Neue"] {
+        for f in ["Cambria", "Constantia", "Palatino", "Palatino Linotype", "Book Antiqua", "Georgia", "Garamond", "GEORGIA"] {
+            assert_eq!(first(f), "Caladea", "{f}");
+        }
+        for f in ["Arial", "ARIAL", "Arial Narrow", "Helvetica", "Helvetica Neue"] {
             assert_eq!(first(f), "Liberation Sans", "{f}");
         }
         for f in ["Times New Roman", "Times"] {
             assert_eq!(first(f), "Liberation Serif", "{f}");
         }
-        for f in ["Courier New", "Consolas", "Courier"] {
+        for f in ["Courier New", "Consolas", "Courier", "Lucida Console"] {
             assert_eq!(first(f), "Liberation Mono", "{f}");
         }
         assert_eq!(first("Inter"), "Inter");
@@ -542,6 +544,8 @@ mod tests {
         assert!(a > 0.0 && d >= 0.0);
     }
 
+    // The PPM build maps Palatino onto Caladea instead (`office_names_map_to_the_office_compatible_set`).
+    #[cfg(not(feature = "ppm-host"))]
     #[test]
     fn palatino_family_prefers_palatino_look_alikes_over_generic_serif() {
         for name in ["Palatino Linotype", "Book Antiqua", "palatino"] {
