@@ -23,11 +23,14 @@ pub struct Resolved {
 
 /// The PPM build's name mapping (`ppm/font_mapping`): Office and Korean document fonts map onto the
 /// bundled Office-compatible set, matched case-insensitively against an exact list. Other names
-/// keep the common chains below (symbol fonts, Palatino, Arial Unicode MS…), which end in Carlito
-/// for a sans name; Hangul glyphs reach NanumGothic through the per-glyph fallback.
+/// are Carlito, except the symbol fonts and the non-Latin scripts' names (Thai, Hebrew, Persian…),
+/// which keep their chains; Hangul glyphs reach NanumGothic through the per-glyph fallback.
+#[cfg(feature = "ppm-host")]
+const PPM_CARLITO: &[&str] = &["Carlito", "Liberation Sans", "Source Sans 3"];
+
 #[cfg(feature = "ppm-host")]
 fn ppm_office_chain(f: &str) -> Option<&'static [&'static str]> {
-    const CARLITO: &[&str] = &["Carlito", "Liberation Sans", "Source Sans 3"];
+    const CARLITO: &[&str] = PPM_CARLITO;
     const CALADEA: &[&str] = &["Caladea", "Carlito", "Source Sans 3"];
     const SANS: &[&str] = &["Liberation Sans", "Carlito", "Source Sans 3"];
     const SERIF: &[&str] = &["Liberation Serif", "Carlito", "Source Sans 3"];
@@ -38,8 +41,7 @@ fn ppm_office_chain(f: &str) -> Option<&'static [&'static str]> {
         "calibri" | "calibri light" | "aptos" | "aptos display" | "aptos narrow" | "aptos light" | "aptos semibold" | "segoe ui"
         | "segoe ui light" | "segoe ui semibold" | "segoe ui semilight" => CARLITO,
         "cambria" | "constantia" | "palatino" | "palatino linotype" | "book antiqua" | "georgia" | "garamond" => CALADEA,
-        // Arial and Helvetica already lead with Liberation Sans in the common chain.
-        "arial narrow" | "helvetica neue" => SANS,
+        "arial" | "arial narrow" | "helvetica" | "helvetica neue" => SANS,
         "times" | "times new roman" => SERIF,
         "courier" | "courier new" | "consolas" | "lucida console" => MONO,
         "inter" => INTER,
@@ -54,6 +56,7 @@ fn ppm_office_chain(f: &str) -> Option<&'static [&'static str]> {
 /// Substitutes to try, in order, for a family that isn't installed. Open fonts that are
 /// metric-compatible come first (Carlito ↔ Calibri, Caladea ↔ Cambria, Liberation ↔ Arial /
 /// Times New Roman / Courier New), then common system fonts, then our bundled families.
+#[cfg_attr(feature = "ppm-host", allow(dead_code))] // the PPM build uses few of the chains below
 fn substitutes(family: &str) -> &'static [&'static str] {
     const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
@@ -132,10 +135,19 @@ fn substitutes(family: &str) -> &'static [&'static str] {
     if is_persian_sans(&f) {
         return ARABIC_SANS;
     }
+    // The PPM build closes the list: a name outside it is Carlito (no serif / mono / code guesses),
+    // except the symbol fonts, whose characters need a face that has them.
     #[cfg(feature = "ppm-host")]
-    if let Some(chain) = ppm_office_chain(&f) {
-        return chain;
+    {
+        if let Some(chain) = ppm_office_chain(&f) {
+            return chain;
+        }
+        return match f.as_str() {
+            "symbol" | "wingdings" | "wingdings 2" | "wingdings 3" | "segoe ui symbol" | "webdings" => SYMBOL,
+            _ => PPM_CARLITO,
+        };
     }
+    #[cfg(not(feature = "ppm-host"))]
     match f.as_str() {
         "palatino linotype" | "book antiqua" | "palatino" => PALATINO,
         "arial" | "helvetica" | "arial nova" => ARIAL,
@@ -466,6 +478,18 @@ mod tests {
             assert_eq!(first(f), "Liberation Mono", "{f}");
         }
         assert_eq!(first("Inter"), "Inter");
+        // The list is closed: guesses by keyword or family are not made in the PPM build.
+        for f in ["Century", "Century Schoolbook", "Aptos Serif", "Arial Nova", "Arial Unicode MS", "Cascadia Code", "Some Mono", "Fancy Serif", "Sitka Text", "Cambria Math"] {
+            assert_eq!(first(f), "Carlito", "{f}");
+            assert!(!substitutes(f).contains(&"Courier New") && !substitutes(f).contains(&"Times New Roman"), "{f}");
+        }
+        // Symbol fonts and the names of other scripts keep their own chains.
+        for f in ["Symbol", "Wingdings", "Webdings", "Segoe UI Symbol"] {
+            assert!(substitutes(f).contains(&"Noto Sans Symbols 2"), "{f}");
+        }
+        for f in ["Cordia New", "David", "B Yekan", "B Nazanin"] {
+            assert_ne!(first(f), "Carlito", "{f}");
+        }
         for f in [
             "맑은 고딕", "Malgun Gothic", "굴림", "Gulim", "굴림체", "GulimChe", "새굴림", "New Gulim", "돋움", "Dotum", "돋움체", "DotumChe",
             "바탕", "Batang", "바탕체", "BatangChe", "궁서", "Gungsuh", "궁서체", "GungsuhChe", "함초롬바탕", "HCR Batang", "함초롬돋움",
@@ -581,6 +605,7 @@ mod tests {
         assert_eq!(actual.substituted, expected.substituted);
     }
 
+    #[cfg(not(feature = "ppm-host"))]
     #[test]
     fn unicode_arial_is_proportional() {
         for name in ["Arial Unicode MS", "ARIAL UNICODE MS"] {
