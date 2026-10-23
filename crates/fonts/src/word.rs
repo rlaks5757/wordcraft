@@ -31,6 +31,10 @@ fn substitutes(family: &str) -> &'static [&'static str] {
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
+    // Korean document fonts: the bundled NanumGothic (the PPM build's only Hangul face), then the
+    // plain sans chain, so a build without it substitutes as it did before.
+    const KOREAN: &[&str] =
+        &["NanumGothic", "Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
     // Word's symbol fonts (Symbol, Wingdings…) are proprietary: their characters are drawn as their
     // Unicode equivalents (`wordcraft_doc::symbol_fonts`) from these faces or any face that has them.
     const SYMBOL: &[&str] = &["Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols", "Noto Sans Symbols 2", "Source Sans 3"];
@@ -103,6 +107,7 @@ fn substitutes(family: &str) -> &'static [&'static str] {
         return ARABIC_SANS;
     }
     match f.as_str() {
+        "맑은 고딕" | "malgun gothic" | "굴림" | "gulim" | "돋움" | "dotum" | "바탕" | "batang" | "궁서" | "gungsuh" | "nanumgothic" | "nanum gothic" => KOREAN,
         "palatino linotype" | "book antiqua" | "palatino" => PALATINO,
         "arial" | "helvetica" | "arial nova" => ARIAL,
         "arial unicode ms" => ARIAL_UNICODE,
@@ -405,6 +410,58 @@ mod tests {
         // A negative gap adds nothing; the most negative descender doesn't overflow.
         assert_eq!(hhea_line(1000, -300, -50), (1000.0, 300.0));
         assert_eq!(hhea_line(1000, i16::MIN, 0), (1000.0, 32768.0));
+    }
+
+    #[test]
+    fn office_names_map_to_the_office_compatible_set() {
+        let first = |f: &str| substitutes(f)[0];
+        for f in ["Calibri", "Calibri Light", "Aptos", "Aptos Display", "Aptos Narrow", "Some Unknown Font"] {
+            assert_eq!(first(f), "Carlito", "{f}");
+        }
+        assert_eq!(first("Cambria"), "Caladea");
+        for f in ["Arial", "Helvetica"] {
+            assert_eq!(first(f), "Liberation Sans", "{f}");
+        }
+        for f in ["Times New Roman", "Times"] {
+            assert_eq!(first(f), "Liberation Serif", "{f}");
+        }
+        // Courier New and Consolas come before Liberation Mono only by being uninstalled names.
+        for f in ["Courier New", "Consolas", "Courier"] {
+            assert!(substitutes(f).contains(&"Liberation Mono"), "{f}");
+        }
+        for f in ["맑은 고딕", "Malgun Gothic", "굴림", "Gulim", "돋움", "Dotum", "바탕", "Batang", "궁서", "Gungsuh", "NanumGothic"] {
+            assert_eq!(first(f), "NanumGothic", "{f}");
+            assert!(substitutes(f).contains(&"Carlito"), "{f} keeps the sans chain");
+        }
+    }
+
+    /// With the PPM font set embedded (`CRAFT_FONTS_DIR=ppm/fonts-ko`), the document font names land on
+    /// the bundled faces; without it there is nothing to check.
+    #[test]
+    fn bundled_office_set_serves_the_document_fonts() {
+        let db = FontDb::with_font_dirs(vec![]);
+        if !db.has_family("Carlito") {
+            eprintln!("skipped: built without the PPM font set (CRAFT_FONTS_DIR)");
+            return;
+        }
+        let want = [
+            ("Calibri", "Carlito"),
+            ("Aptos Narrow", "Carlito"),
+            ("Unknown Sans", "Carlito"),
+            ("Cambria", "Caladea"),
+            ("Arial", "Liberation Sans"),
+            ("Times New Roman", "Liberation Serif"),
+            ("Consolas", "Liberation Mono"),
+            ("맑은 고딕", "NanumGothic"),
+        ];
+        for (name, family) in want {
+            assert_eq!(substitute(&db, name), Some(family), "{name}");
+            assert!(db.has_family(family), "{family}");
+        }
+        for style in ["Regular", "Bold", "Italic", "Bold Italic"] {
+            assert_eq!(db.face("Carlito", style).family, "Carlito", "{style}");
+            assert_eq!(db.face("Liberation Mono", style).family, "Liberation Mono", "{style}");
+        }
     }
 
     #[test]

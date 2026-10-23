@@ -1,8 +1,8 @@
 //! Optional craft-fonts build input (https://github.com/storytold/craft-fonts, recipe from its
 //! `docs/integration.md`). With `CRAFT_FONTS_DIR=<checkout>` the fonts in its
 //! `fonts/manifest.txt` are embedded as `CRAFT_FONTS`; unset, `CRAFT_FONTS` is empty. Web
-//! (wasm32) builds embed only the UI face, BIZ UDPGothic Regular, and any `Kore` face, to stay
-//! within the web size budget. With `CRAFT_FONTS_REQUIRED` (releases), a native build also fails when the checkout
+//! (wasm32) builds embed only the UI face, BIZ UDPGothic Regular, any `Kore` face and the
+//! Office-compatible Latin set (`OFFICE_FAMILIES`), to stay within the web size budget. With `CRAFT_FONTS_REQUIRED` (releases), a native build also fails when the checkout
 //! has no font for a CJK interface language (Japanese, Simplified Chinese), as an outdated pin
 //! once did (#241). It only reads the local checkout: no network.
 use std::fmt::Write as _;
@@ -38,6 +38,9 @@ fn main() {
     }
 }
 
+/// The families (all styles) the web build keeps besides the UI and Korean faces.
+const OFFICE_FAMILIES: &[&str] = &["Carlito", "Caladea", "Liberation Sans", "Liberation Serif", "Liberation Mono"];
+
 /// Scripts a release build (`CRAFT_FONTS_REQUIRED`, native) must embed a font for: the CJK
 /// interface languages' (Japanese, Simplified Chinese).
 const REQUIRED_SCRIPTS: &[&str] = &["Jpan", "Hans"];
@@ -55,9 +58,10 @@ fn craft_fonts(dir: &std::path::Path) -> Result<(String, Vec<String>), String> {
         let [family, style, file, scripts, ..] = f.as_slice() else {
             return Err(format!("malformed manifest line: {line}"));
         };
-        // The web build keeps the UI face and a Korean face (Hangul draws as boxes without one).
+        // The web build keeps the UI face, a Korean face (Hangul draws as boxes without one) and the
+        // Office-compatible Latin set (what the server's PDF renderer draws Calibri, Cambria, Arial… with).
         let korean = scripts.split(',').any(|s| s.trim() == "Kore");
-        if wasm && !(*family == "BIZ UDPGothic" && *style == "Regular") && !korean {
+        if wasm && !(*family == "BIZ UDPGothic" && *style == "Regular") && !korean && !OFFICE_FAMILIES.contains(family) {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;

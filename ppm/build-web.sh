@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PPM 포크 웹 빌드: 한글 글꼴(NanumGothic, OFL-1.1)을 넣어 dist/web 을 만든다.
-# 이 글꼴만 들어간다(업스트림 릴리스에 있던 다른 글꼴은 빠진다).
+# 이 글꼴과 Office 호환 글꼴(Carlito, Caladea, Liberation)만 들어간다(업스트림 릴리스에 있던 다른 글꼴은 빠진다).
 # 필요: Rust 1.95+ (기본 1.99.1), wasm32-unknown-unknown target, trunk 0.21+
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,6 +29,12 @@ fi
 # OFL-1.1 §2: the license travels with the embedded font.
 mkdir -p "$root/dist/web/licenses"
 cp "$root/ppm/fonts-ko/fonts/nanum-gothic/OFL.txt" "$root/dist/web/licenses/NanumGothic-OFL.txt"
+# Office 호환 글꼴(Carlito, Caladea, Liberation): 글꼴마다 자기 라이선스(Caladea만 Apache-2.0)가 함께 간다.
+for dir in carlito caladea liberation-sans liberation-serif liberation-mono; do
+  for lic in "$root/ppm/fonts-ko/fonts/$dir/OFL.txt" "$root/ppm/fonts-ko/fonts/$dir/LICENSE.txt"; do
+    [ -f "$lic" ] && cp "$lic" "$root/dist/web/licenses/$dir-$(basename "$lic")"
+  done
+done
 # 관리자 화면이 읽는 명령 목록(공통 형식: app, schema, 명령마다 id, label, labelKo, location 배열, grades.builder).
 # 잠금 표에서 만들어 표와 어긋나지 않는다. 임시 파일에 쓰고 성공했을 때만 옮겨서, 실패해도 빈 파일이 남지 않는다.
 cd "$root"
