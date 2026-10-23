@@ -45,10 +45,38 @@ fn ppm_office_chain(f: &str) -> Option<&'static [&'static str]> {
         "times" | "times new roman" => SERIF,
         "courier" | "courier new" | "consolas" | "lucida console" => MONO,
         "inter" => INTER,
-        "맑은 고딕" | "malgun gothic" | "굴림" | "gulim" | "굴림체" | "gulimche" | "새굴림" | "new gulim" | "돋움" | "dotum" | "돋움체"
-        | "dotumche" | "바탕" | "batang" | "바탕체" | "batangche" | "궁서" | "gungsuh" | "궁서체" | "gungsuhche" | "함초롬바탕"
-        | "hcr batang" | "함초롬돋움" | "hcr dotum" | "나눔고딕" | "nanumgothic" | "나눔명조" | "nanummyeongjo" | "noto sans kr"
-        | "noto sans cjk kr" | "noto serif kr" | "apple sd gothic neo" => KOREAN,
+        "맑은 고딕"
+        | "malgun gothic"
+        | "굴림"
+        | "gulim"
+        | "굴림체"
+        | "gulimche"
+        | "새굴림"
+        | "new gulim"
+        | "돋움"
+        | "dotum"
+        | "돋움체"
+        | "dotumche"
+        | "바탕"
+        | "batang"
+        | "바탕체"
+        | "batangche"
+        | "궁서"
+        | "gungsuh"
+        | "궁서체"
+        | "gungsuhche"
+        | "함초롬바탕"
+        | "hcr batang"
+        | "함초롬돋움"
+        | "hcr dotum"
+        | "나눔고딕"
+        | "nanumgothic"
+        | "나눔명조"
+        | "nanummyeongjo"
+        | "noto sans kr"
+        | "noto sans cjk kr"
+        | "noto serif kr"
+        | "apple sd gothic neo" => KOREAN,
         _ => return None,
     })
 }
@@ -460,8 +488,19 @@ mod tests {
     fn office_names_map_to_the_office_compatible_set() {
         let first = |f: &str| substitutes(f)[0];
         for f in [
-            "Calibri", "calibri light", "Aptos", "Aptos Display", "Aptos Narrow", "Aptos Light", "Aptos SemiBold", "Segoe UI", "Segoe UI Light",
-            "Segoe UI Semibold", "Segoe UI Semilight", "Some Unknown Font", "Arial Black",
+            "Calibri",
+            "calibri light",
+            "Aptos",
+            "Aptos Display",
+            "Aptos Narrow",
+            "Aptos Light",
+            "Aptos SemiBold",
+            "Segoe UI",
+            "Segoe UI Light",
+            "Segoe UI Semibold",
+            "Segoe UI Semilight",
+            "Some Unknown Font",
+            "Arial Black",
         ] {
             assert_eq!(first(f), "Carlito", "{f}");
         }
@@ -479,7 +518,18 @@ mod tests {
         }
         assert_eq!(first("Inter"), "Inter");
         // The list is closed: guesses by keyword or family are not made in the PPM build.
-        for f in ["Century", "Century Schoolbook", "Aptos Serif", "Arial Nova", "Arial Unicode MS", "Cascadia Code", "Some Mono", "Fancy Serif", "Sitka Text", "Cambria Math"] {
+        for f in [
+            "Century",
+            "Century Schoolbook",
+            "Aptos Serif",
+            "Arial Nova",
+            "Arial Unicode MS",
+            "Cascadia Code",
+            "Some Mono",
+            "Fancy Serif",
+            "Sitka Text",
+            "Cambria Math",
+        ] {
             assert_eq!(first(f), "Carlito", "{f}");
             assert!(!substitutes(f).contains(&"Courier New") && !substitutes(f).contains(&"Times New Roman"), "{f}");
         }
@@ -491,9 +541,37 @@ mod tests {
             assert_ne!(first(f), "Carlito", "{f}");
         }
         for f in [
-            "맑은 고딕", "Malgun Gothic", "굴림", "Gulim", "굴림체", "GulimChe", "새굴림", "New Gulim", "돋움", "Dotum", "돋움체", "DotumChe",
-            "바탕", "Batang", "바탕체", "BatangChe", "궁서", "Gungsuh", "궁서체", "GungsuhChe", "함초롬바탕", "HCR Batang", "함초롬돋움",
-            "HCR Dotum", "나눔고딕", "NanumGothic", "나눔명조", "NanumMyeongjo", "Noto Sans KR", "Noto Sans CJK KR", "Noto Serif KR",
+            "맑은 고딕",
+            "Malgun Gothic",
+            "굴림",
+            "Gulim",
+            "굴림체",
+            "GulimChe",
+            "새굴림",
+            "New Gulim",
+            "돋움",
+            "Dotum",
+            "돋움체",
+            "DotumChe",
+            "바탕",
+            "Batang",
+            "바탕체",
+            "BatangChe",
+            "궁서",
+            "Gungsuh",
+            "궁서체",
+            "GungsuhChe",
+            "함초롬바탕",
+            "HCR Batang",
+            "함초롬돋움",
+            "HCR Dotum",
+            "나눔고딕",
+            "NanumGothic",
+            "나눔명조",
+            "NanumMyeongjo",
+            "Noto Sans KR",
+            "Noto Sans CJK KR",
+            "Noto Serif KR",
             "Apple SD Gothic Neo",
         ] {
             assert_eq!(first(f), "NanumGothic", "{f}");

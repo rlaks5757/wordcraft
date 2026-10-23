@@ -121,7 +121,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 app.ui.backstage = false;
                                 app.canvas.want_focus = true;
                             } else {
-                                app.ui.backstage_page = if app.host_locked() && !crate::host_lock::backstage_page_allowed("saveAs", app.session.host_policy()) { "options" } else { "saveAs" }.into();
+                                app.ui.backstage_page =
+                                    if app.host_locked() && !crate::host_lock::backstage_page_allowed("saveAs", app.session.host_policy()) {
+                                        "options"
+                                    } else {
+                                        "saveAs"
+                                    }
+                                    .into();
                             }
                         }
                         "saveAs" => {

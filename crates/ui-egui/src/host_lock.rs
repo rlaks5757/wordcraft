@@ -186,7 +186,11 @@ mod tests {
         }
         assert!(check_ui("ui.dialog", &json!({"name": "renameDocument"}), off).is_err());
         // A refusal is worded in Korean, with the part the callers look for.
-        for why in [check_ui("ui.print", &json!({}), off), check_ui("ui.dialog", &json!({"name": "renameDocument"}), off), check_ui("ui.backstage", &json!({"page": "open"}), off)] {
+        for why in [
+            check_ui("ui.print", &json!({}), off),
+            check_ui("ui.dialog", &json!({"name": "renameDocument"}), off),
+            check_ui("ui.backstage", &json!({"page": "open"}), off),
+        ] {
             let why = why.unwrap_err();
             assert!(why.contains(wordcraft_engine::host_policy::NOT_AVAILABLE), "{why}");
         }
@@ -212,7 +216,8 @@ mod tests {
         }
         assert!(check_ui("ui.discord", &json!({}), &links).is_ok() && check_ui("ui.discord", &json!({}), &print).is_err());
         assert!(links_on(&links) && !links_on(&print) && !links_on(&HostPolicy::default()));
-        let everything = overrides(&[("file.print", true), ("file.saveAs", true), (EXTERNAL_LINKS, true), ("ui.openFileDialog", true), ("ui.startScreen", true)]);
+        let everything =
+            overrides(&[("file.print", true), ("file.saveAs", true), (EXTERNAL_LINKS, true), ("ui.openFileDialog", true), ("ui.startScreen", true)]);
         assert!(check_ui("ui.openFileDialog", &json!({}), &everything).is_err(), "opening stays locked");
         assert!(check_ui("ui.startScreen", &json!({}), &everything).is_err());
         assert!(check_ui("ui.backstage", &json!({"page": "print"}), &print).is_ok());
@@ -233,7 +238,14 @@ mod tests {
     #[test]
     fn every_command_has_a_korean_label() {
         let file = commands_json();
-        let missing: Vec<&str> = file["commands"].as_array().unwrap().iter().filter(|c| !c["labelKo"].as_str().is_some_and(has_hangul_or_no_letters)).filter(|c| !c["id"].as_str().is_some_and(|id| SAME_IN_KOREAN.contains(&id))).filter_map(|c| c["id"].as_str()).collect();
+        let missing: Vec<&str> = file["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| !c["labelKo"].as_str().is_some_and(has_hangul_or_no_letters))
+            .filter(|c| !c["id"].as_str().is_some_and(|id| SAME_IN_KOREAN.contains(&id)))
+            .filter_map(|c| c["id"].as_str())
+            .collect();
         assert!(missing.is_empty(), "no Korean label: {missing:?}");
     }
 

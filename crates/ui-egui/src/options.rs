@@ -112,7 +112,11 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(16.0);
     // Host mode: the panes that switch file features back on don't show.
     let hidden = |app: &WordApp, id: &str| app.host_locked() && crate::host_lock::HIDDEN_OPTIONS_PANES.contains(&id);
-    let current = if PANES.contains(&app.ui.options_pane.as_str()) && !hidden(app, &app.ui.options_pane) { app.ui.options_pane.clone() } else { "general".to_string() };
+    let current = if PANES.contains(&app.ui.options_pane.as_str()) && !hidden(app, &app.ui.options_pane) {
+        app.ui.options_pane.clone()
+    } else {
+        "general".to_string()
+    };
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width(170.0);

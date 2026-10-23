@@ -356,9 +356,24 @@ mod tests {
     fn file_and_platform_commands_are_refused() {
         let mut s = locked();
         for id in [
-            "file.new", "file.open", "file.saveAs", "file.exportPdf", "file.exportPng", "file.print", "file.printPdf", "file.newFromTemplate", "file.saveTemplate",
-            "file.recover", "file.autosave", "file.close", "file.share", "file.rename", "file.versions", "tools.macros",
-            "tools.recordMacro", "view.newWindow",
+            "file.new",
+            "file.open",
+            "file.saveAs",
+            "file.exportPdf",
+            "file.exportPng",
+            "file.print",
+            "file.printPdf",
+            "file.newFromTemplate",
+            "file.saveTemplate",
+            "file.recover",
+            "file.autosave",
+            "file.close",
+            "file.share",
+            "file.rename",
+            "file.versions",
+            "tools.macros",
+            "tools.recordMacro",
+            "view.newWindow",
         ] {
             let before = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
             let r = s.run(id, &json!({"path": "/tmp/x.docx", "data": "AAAA", "text": "x"}));
@@ -371,8 +386,27 @@ mod tests {
     #[test]
     fn edits_into_the_document_are_allowed() {
         for id in [
-            "insert.picture", "insert.textFromFile", "insert.object", "insert.spreadsheet", "picture.change", "font.loadSystem", "font.add", "font.remove", "review.compare",
-            "review.combine", "tools.customizeKeyboard", "tools.customizeRibbon", "developer.picture", "tools.attachTemplate", "tools.detachTemplate", "tools.linkStyles", "tools.updateStyles", "tools.templates", "mailings.start", "mailings.finish", "mailings.recipients",
+            "insert.picture",
+            "insert.textFromFile",
+            "insert.object",
+            "insert.spreadsheet",
+            "picture.change",
+            "font.loadSystem",
+            "font.add",
+            "font.remove",
+            "review.compare",
+            "review.combine",
+            "tools.customizeKeyboard",
+            "tools.customizeRibbon",
+            "developer.picture",
+            "tools.attachTemplate",
+            "tools.detachTemplate",
+            "tools.linkStyles",
+            "tools.updateStyles",
+            "tools.templates",
+            "mailings.start",
+            "mailings.finish",
+            "mailings.recipients",
         ] {
             assert!(check(id, &json!({}), &HostPolicy::default()).is_ok(), "{id}");
         }
@@ -382,10 +416,19 @@ mod tests {
     #[test]
     fn a_message_policy_is_read_leniently() {
         let none = HostPolicy::default();
-        for bad in [None, Some(json!(null)), Some(json!([1])), Some(json!({})), Some(json!({"overrides": [true]})), Some(json!({"overrides": "x"})), Some(json!({"allow": ["print"]}))] {
+        for bad in [
+            None,
+            Some(json!(null)),
+            Some(json!([1])),
+            Some(json!({})),
+            Some(json!({"overrides": [true]})),
+            Some(json!({"overrides": "x"})),
+            Some(json!({"allow": ["print"]})),
+        ] {
             assert_eq!(HostPolicy::from_message(bad.as_ref()), none, "{bad:?}");
         }
-        let p = HostPolicy::from_message(Some(&json!({"overrides": {"file.print": true, "format.bold": false, "format.italic": "no", "file.open": 1}})));
+        let p =
+            HostPolicy::from_message(Some(&json!({"overrides": {"file.print": true, "format.bold": false, "format.italic": "no", "file.open": 1}})));
         assert!(p.command_on("file.print") && !p.command_on("format.bold") && p.command_on("format.italic"), "a non-boolean is skipped");
         assert!(!p.command_on("file.open"));
         // 5000 junk entries first do not push out the valid switch after them.
