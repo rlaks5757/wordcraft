@@ -37,6 +37,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if !has_document && !works_without_document(&app.ui.backstage_page) {
         app.ui.backstage_page = "home".into();
     }
+    // Host mode: the pages that open, create or export files and Info don't exist; land on Options.
+    if app.host_locked() && !crate::host_lock::backstage_page_allowed(&app.ui.backstage_page, app.session.host_policy()) {
+        app.ui.backstage_page = "options".into();
+    }
     let mac = app.integrated_titlebar;
     egui::Panel::left("backstage_nav")
         .exact_size(200.0)
@@ -80,6 +84,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             ui.add_space(if mac { 12.0 } else { 6.0 });
             for (id, label, icon) in PAGES {
+                // Host mode: only the pages in `BACKSTAGE_PAGES` exist.
+                if app.host_locked() && !crate::host_lock::backstage_page_allowed(id, app.session.host_policy()) {
+                    continue;
+                }
                 // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
                 let on = has_document || works_without_document(id);
                 let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
@@ -113,7 +121,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 app.ui.backstage = false;
                                 app.canvas.want_focus = true;
                             } else {
-                                app.ui.backstage_page = "saveAs".into();
+                                app.ui.backstage_page =
+                                    if app.host_locked() && !crate::host_lock::backstage_page_allowed("saveAs", app.session.host_policy()) {
+                                        "options"
+                                    } else {
+                                        "saveAs"
+                                    }
+                                    .into();
                             }
                         }
                         "saveAs" => {
@@ -130,6 +144,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                 for (label, id) in [("About", "about"), ("Discord community", "discord")] {
+                    if id == "discord" && !app.links_allowed() {
+                        continue;
+                    }
                     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!(label)));
                     if resp.hovered() {

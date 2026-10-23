@@ -110,11 +110,20 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Options")).font(semibold(26.0)));
     ui.add_space(16.0);
-    let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
+    // Host mode: the panes that switch file features back on don't show.
+    let hidden = |app: &WordApp, id: &str| app.host_locked() && crate::host_lock::HIDDEN_OPTIONS_PANES.contains(&id);
+    let current = if PANES.contains(&app.ui.options_pane.as_str()) && !hidden(app, &app.ui.options_pane) {
+        app.ui.options_pane.clone()
+    } else {
+        "general".to_string()
+    };
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width(170.0);
             for id in PANES {
+                if hidden(app, id) {
+                    continue;
+                }
                 let label = tl!(pane_label(id));
                 let active = current == id;
                 let (r, resp) = ui.allocate_exact_size(vec2(170.0, 30.0), egui::Sense::click());
@@ -425,10 +434,13 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn language(app: &mut WordApp, ui: &mut Ui) {
-    section(ui, "Interface language");
-    language_picker(app, ui);
+    // The PPM build is always Korean: no interface language section at all.
+    if !app.host_locked() {
+        section(ui, "Interface language");
+        language_picker(app, ui);
+        ui.add_space(8.0);
+    }
     // #414 (detect the document's language) goes here.
-    ui.add_space(8.0);
     section(ui, "Proofing language");
     note(ui, "Spelling and grammar are checked in English (United States).");
 }
@@ -470,12 +482,14 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(8.0);
     section(ui, "Display");
     egui::Grid::new("options_display").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Recent documents to show:"));
-        let mut n = app.ui.recent_shown();
-        if ui.add(egui::DragValue::new(&mut n).range(0..=crate::MAX_RECENT).speed(0.2)).changed() {
-            app.ui.recent_count = n;
+        if !app.host_locked() {
+            ui.label(tl!("Recent documents to show:"));
+            let mut n = app.ui.recent_shown();
+            if ui.add(egui::DragValue::new(&mut n).range(0..=crate::MAX_RECENT).speed(0.2)).changed() {
+                app.ui.recent_count = n;
+            }
+            ui.end_row();
         }
-        ui.end_row();
         ui.label(tl!("Measurement units:"));
         // The user's choice, else the region's (#838): Automatic follows the region.
         let units = app.session.units();
@@ -757,6 +771,28 @@ mod tests {
         );
         h.run_steps(4);
         h
+    }
+
+    /// The PPM build is always Korean: the Language pane has no interface language section.
+    #[test]
+    fn language_pane_has_no_interface_language_when_host_locked() {
+        for locked in [false, true] {
+            let mut a = app();
+            if locked {
+                a.session.lock_to_host();
+            }
+            a.run("file.options", json!({"pane": "language"})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            h.run_steps(4);
+            assert_eq!(h.query_by_label("Interface language").is_some(), !locked, "locked: {locked}");
+        }
     }
 
     /// #1266: check the actual painted text and renderer clip, including the bold selected

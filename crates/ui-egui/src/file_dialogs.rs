@@ -130,6 +130,12 @@ impl WordApp {
     /// Ask the host for a file and do `after` with the answer: now for a blocking dialog, on a
     /// later frame for an asynchronous one. Ignored while another dialog is open.
     pub(crate) fn ask_file(&mut self, req: FileDialogRequest, after: AfterPick) -> Asked {
+        // Host mode: the parent owns the document. A picker may fetch a file to put into it (a
+        // picture, recipients, a document to compare), but not open or replace the document, and
+        // saving or printing to a file needs the parent's policy.
+        if self.host_locked() && !self.host_allows_pick(&after) {
+            return Asked::Done(Err(wordcraft_engine::host_policy::NOT_AVAILABLE.to_string()));
+        }
         if self.file_dialog_open() {
             log::debug!("file dialog already open; ignoring {req:?}");
             self.status(tl!("A file dialog is already open."));
@@ -148,6 +154,21 @@ impl WordApp {
             FileDialogRequest::Save { name } => self.services.pick_save.as_ref().and_then(|f| f(name)),
         };
         Asked::Done(self.finish_pick(after, picked))
+    }
+
+    /// Whether a host-locked app may show a dialog for `after`.
+    fn host_allows_pick(&self, after: &AfterPick) -> bool {
+        let policy = self.session.host_policy();
+        match after {
+            AfterPick::Picture | AfterPick::Recipients | AfterPick::ComparePath { .. } => true,
+            #[cfg(not(target_arch = "wasm32"))]
+            AfterPick::Sources => true,
+            AfterPick::SaveAs { .. } => policy.command_on("file.saveAs"),
+            AfterPick::Export { .. } => policy.command_on("file.exportPdf") || policy.command_on("file.exportPng"),
+            AfterPick::PrintPdf { .. } => policy.command_on("file.printPdf"),
+            AfterPick::Font | AfterPick::ForDialog => true,
+            AfterPick::OpenDocument => false,
+        }
     }
 
     /// Pick up the answer of an open file dialog, if it has arrived (every frame, from `logic`),
@@ -373,6 +394,9 @@ impl WordApp {
     }
 
     pub(crate) fn open_dialog(&mut self) {
+        if self.host_locked() {
+            return;
+        }
         if let Some(f) = &self.services.open_async {
             f("document");
             return;

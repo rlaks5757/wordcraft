@@ -2,8 +2,12 @@
 //! WordCraft in an `<iframe>`. Messages are plain objects with a `type`:
 //!
 //! - `wordcraft:ready` (to the parent): `{ version }`, the app is listening; send a file now.
-//! - `wordcraft:open` (from the parent): `{ name, bytes }`, bytes an `ArrayBuffer` or
+//! - `wordcraft:open` (from the parent): `{ name, bytes, policy? }`, bytes an `ArrayBuffer` or
 //!   `Uint8Array`. It opens like a document picked with File › Open or dropped on the window.
+//!   `policy: { overrides: { "<command id>": true | false } }` switches commands for this document
+//!   (true turns on a command that is off by default, such as `file.print`, `file.saveAs` and
+//!   `ui.externalLinks`; false turns one off; locked commands ignore it). Without a valid policy
+//!   every command keeps its default.
 //! - `wordcraft:save` (to the parent): `{ name, bytes }` (a transferred `ArrayBuffer`) for every
 //!   file WordCraft would otherwise download: Save and Save As (a .docx document) and Export
 //!   (such as PDF). The parent stores it and reports failures itself.
@@ -25,8 +29,9 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::closure::Closure;
+use wordcraft_engine::host_policy::HostPolicy;
 use wordcraft_ui_egui::host_table::{self, MAX_CELL_CHARS, MAX_COLS, MAX_ROWS};
-use wordcraft_ui_egui::{Inbox, Services, WordApp};
+use wordcraft_ui_egui::{HostPolicySlot, Inbox, Services, WordApp, queue_host_file};
 
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
@@ -73,8 +78,13 @@ impl Bridge {
     /// Send saved and exported files to the parent instead of downloading them, report the dirty
     /// flag to it, and hear files from it. A file handed over counts as a finished save: the app
     /// marks the document saved when `download` returns `Ok` and no picker ticket was started.
-    pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
-        self.listen(inbox, ctx);
+    pub fn connect(&self, services: &mut Services, ctx: egui::Context) {
+        // The parent's documents wait apart from the user's own files (picker, drops).
+        let host_inbox = Inbox::default();
+        let policy = HostPolicySlot::default();
+        services.host_inbox = Some(host_inbox.clone());
+        services.host_policy = Some(policy.clone());
+        self.listen(host_inbox, policy, ctx);
         let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes)));
         // The app tells the dirty flag after each pass; the parent hears it when it changes.
@@ -133,7 +143,7 @@ impl Bridge {
             .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
     }
 
-    fn listen(&self, inbox: Inbox, ctx: egui::Context) {
+    fn listen(&self, inbox: Inbox, policy_slot: HostPolicySlot, ctx: egui::Context) {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
         let tables = self.tables.clone();
@@ -146,7 +156,8 @@ impl Bridge {
                 Some("wordcraft:open") => {
                     let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Document.docx".to_string());
                     let Some(bytes) = bytes(&data) else { return };
-                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                    // The policy goes in with the file (one per file, the queue is capped).
+                    queue_host_file(&inbox, &policy_slot, (name, bytes), policy(&data));
                 }
                 Some("wordcraft:insert-table") => {
                     // Without a usable id there is nobody to answer.
@@ -177,6 +188,21 @@ fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
         js_sys::Reflect::set(&m, &JsValue::from_str(key), value).ok()?;
     }
     Some(m)
+}
+
+/// The per-command switches of the open message's `policy.overrides` (`{ "<command id>": bool }`),
+/// read as [`HostPolicy::from_entries`] does: a missing or malformed policy changes nothing, a
+/// value that is not a boolean is skipped, an id that is no command does nothing.
+fn policy(data: &JsValue) -> HostPolicy {
+    let get = |from: &JsValue, key: &str| js_sys::Reflect::get(from, &JsValue::from_str(key)).ok();
+    let Some(overrides) = get(data, "policy").and_then(|p| get(&p, "overrides")).filter(|o| o.is_object() && !js_sys::Array::is_array(o)) else {
+        return HostPolicy::default();
+    };
+    let entries = js_sys::Object::entries(&js_sys::Object::from(overrides));
+    HostPolicy::from_entries(entries.iter().filter_map(|e| {
+        let pair = js_sys::Array::from(&e);
+        Some((pair.get(0).as_string()?, pair.get(1).as_bool()))
+    }))
 }
 
 fn string(data: &JsValue, key: &str) -> Option<String> {

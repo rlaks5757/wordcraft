@@ -56,6 +56,7 @@ pub mod file_browser;
 pub mod file_dialogs;
 pub mod frame;
 pub mod guides;
+pub mod host_lock;
 pub mod host_table;
 pub mod i18n;
 pub mod icons;
@@ -115,6 +116,14 @@ pub struct Services {
     pub open_async: Option<Box<dyn Fn(&str)>>,
     /// Web: files (name, bytes) delivered asynchronously (picker, drag and drop).
     pub inbox: Option<Inbox>,
+    /// Web, host mode: documents the parent page sends (name, bytes). Kept apart from `inbox`
+    /// (the user's own picker and drops), which routes by file extension: a file from the parent
+    /// is always a document to open, whatever its name, and a file the user picks is never one the
+    /// parent sent.
+    pub host_inbox: Option<Inbox>,
+    /// Web, host mode: the policy of each open message in `host_inbox`, in the same order (one
+    /// per file). A file with none left opens with no switch changed.
+    pub host_policy: Option<HostPolicySlot>,
     /// Web: pictures pasted from the browser's clipboard (the bytes; the name is ignored). Kept
     /// apart from `inbox` because a paste only lands in the document when the page is the edit
     /// target (#1349), where a dropped or opened file always lands.
@@ -217,6 +226,26 @@ pub enum DefaultApp {
 
 /// Files delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+
+/// The policies the parent's open messages carry, oldest first, until the app picks them up.
+pub type HostPolicySlot = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<wordcraft_engine::host_policy::HostPolicy>>>;
+
+/// Most parent documents waiting to open; a newer one pushes the oldest out.
+pub const MAX_HOST_QUEUE: usize = 8;
+
+/// Queue a parent document with its policy for [`WordApp`] (one policy per file, same order).
+/// Over [`MAX_HOST_QUEUE`] the oldest is dropped, with a log line.
+pub fn queue_host_file(inbox: &Inbox, slot: &HostPolicySlot, file: (String, Vec<u8>), policy: wordcraft_engine::host_policy::HostPolicy) {
+    let mut policies = slot.lock().unwrap_or_else(|e| e.into_inner());
+    let mut files = inbox.lock().unwrap_or_else(|e| e.into_inner());
+    while files.len() >= MAX_HOST_QUEUE {
+        let (dropped, _) = files.remove(0);
+        policies.pop_front();
+        log::warn!("too many documents waiting from the parent; dropped {dropped}");
+    }
+    policies.push_back(policy);
+    files.push(file);
+}
 
 /// Whether a pasted picture belongs in the document: the page has keyboard focus, and no
 /// Backstage or dialog is open (#1349). A focused text field (comment, Find box) means the page
@@ -607,6 +636,9 @@ pub struct WordApp {
     saves_in_flight: Vec<SaveInFlight>,
     /// Web: the command a Save Changes prompt held back until its picker save ends (#1315).
     awaiting_save: Option<AwaitingSave>,
+    /// Host mode: the policy in force before a parent document's own policy was set, put back if
+    /// that document is not opened (Save Changes cancelled, or ended without opening).
+    host_policy_undo: Option<wordcraft_engine::host_policy::HostPolicy>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
@@ -710,6 +742,7 @@ impl WordApp {
             autosave_path: None,
             saves_in_flight: Vec::new(),
             awaiting_save: None,
+            host_policy_undo: None,
             change_picture_target: None,
             recipient_list_pending: false,
             font_generation: wordcraft_fonts::FontDb::global().generation(),
@@ -833,6 +866,26 @@ impl WordApp {
         }
     }
 
+    /// Whether this app is locked to the PPM host page ([`wordcraft_engine::Session::lock_to_host`]).
+    pub fn host_locked(&self) -> bool {
+        self.session.is_host_locked()
+    }
+
+    /// Whether links may open other sites: always outside host mode, in host mode only when the
+    /// parent's policy switched on `ui.externalLinks`.
+    pub fn links_allowed(&self) -> bool {
+        !self.session.is_host_locked() || host_lock::links_on(self.session.host_policy())
+    }
+
+    /// `Err` when the host lock refuses command `id` (engine commands by the engine's allowlist,
+    /// `ui.*` by [`host_lock`]). Silent: no status message, the control is just absent.
+    fn host_refusal(&self, id: &str, params: &Value) -> Result<(), String> {
+        if !self.session.is_host_locked() {
+            return Ok(());
+        }
+        if id.starts_with("ui.") { host_lock::check_ui(id, params, self.session.host_policy()) } else { self.session.host_check(id, params) }
+    }
+
     /// `run` for a command a mouse drag on a table sends: the view stays where it is.
     pub(crate) fn run_keep_view(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.canvas.keep_view = true;
@@ -845,6 +898,8 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // The PPM host lock comes first: a refused command opens no dialog and asks nothing.
+        self.host_refusal(id, &params)?;
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -916,6 +971,7 @@ impl WordApp {
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.host_refusal(id, &params)?;
         // A pending Change Picture only survives until the next action (#147).
         if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
             self.change_picture_target = None;
@@ -1108,7 +1164,10 @@ impl WordApp {
             }
         }
         let go = match choice {
-            SaveChoice::Cancel => false,
+            SaveChoice::Cancel => {
+                self.drop_host_open();
+                false
+            }
             SaveChoice::DontSave => true,
             // A new document or an import-only Word file: ask where through Save As. The command
             // runs once that has saved, on a later frame with the non-blocking dialog (#94).
@@ -1133,6 +1192,8 @@ impl WordApp {
             },
         };
         if !go {
+            // Nothing opens: a parent document waiting on this answer is dropped.
+            self.drop_host_open();
             return Ok(json!({"done": false}));
         }
         self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
@@ -1156,7 +1217,17 @@ impl WordApp {
             };
         }
         let retry = (id == "file.open").then(|| params.clone());
+        // An armed parent document is used up by this open: it either took the held-back policy
+        // for good or failed and gives it back (a password prompt keeps the grant waiting).
+        let armed = id == "file.open" && self.session.host_open_pending();
         let r = self.execute(id, params);
+        if armed {
+            match &r {
+                Ok(_) => self.host_policy_undo = None,
+                Err(e) if !wordcraft_engine::io::needs_password(e) => self.drop_host_open(),
+                Err(_) => {}
+            }
+        }
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
         {
@@ -1358,7 +1429,9 @@ impl WordApp {
         for req in std::mem::take(&mut self.session.ui_requests) {
             self.handle_request(&req);
         }
-        if let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
+        // Host mode: the parent's file names are not the user's to list.
+        if !self.session.is_host_locked()
+            && let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
             && self.ui.recent.first() != Some(&p)
         {
             self.ui.recent.retain(|r| *r != p);
@@ -2011,6 +2084,7 @@ impl WordApp {
         self.clear_stale_change_picture();
         let _ = self.poll_file_dialog();
         self.drain_inbox();
+        self.drain_host_inbox();
         self.drain_pasted();
         self.watch_fonts(ctx);
         let document = self.session.document_id();
@@ -2238,7 +2312,9 @@ impl WordApp {
         crate::keytips::show(self, &ctx, ui);
         keys::global_shortcuts(self, &ctx);
         self.refocus_after_chrome_click(&ctx);
-        if let Some(url) = self.canvas.open_url.take() {
+        if let Some(url) = self.canvas.open_url.take()
+            && self.links_allowed()
+        {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         let title = if self.has_document() {
@@ -2351,6 +2427,62 @@ impl WordApp {
             if r.is_ok() {
                 self.ui.backstage = false;
             }
+        }
+    }
+
+    /// Documents the parent page sent: each opens as a document, like File › Open (a dirty
+    /// document asks Save / Don't Save / Cancel first). The name's extension only picks the file
+    /// format, never another kind of import. One at a time: while a document waits for the Save
+    /// Changes answer the rest stay in the inbox, and each opens with its own message's policy.
+    fn drain_host_inbox(&mut self) {
+        let Some(inbox) = self.services.host_inbox.clone() else { return };
+        loop {
+            if self.session.host_open_pending() {
+                if self.host_open_waiting() {
+                    return;
+                }
+                // The answer ended without opening it (the prompt is gone and no save is running).
+                self.drop_host_open();
+            }
+            let file = {
+                let mut files = inbox.lock().unwrap_or_else(|e| e.into_inner());
+                if files.is_empty() { None } else { Some(files.remove(0)) }
+            };
+            let Some((name, bytes)) = file else { return };
+            // The policy arrives with the open message; a message without one means no switch changed.
+            let policy = self.services.host_policy.as_ref().and_then(|slot| slot.lock().unwrap_or_else(|e| e.into_inner()).pop_front());
+            self.host_policy_undo = Some(self.session.host_policy().clone());
+            self.session.set_host_policy(policy.unwrap_or_default());
+            // The user's own Open is blocked in host mode; the parent's document is the one open
+            // that passes the lock (it stays armed while a Save Changes prompt waits).
+            self.session.arm_host_open(&name);
+            let r = self.run("file.open", json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}));
+            if !r.as_ref().is_ok_and(|v| v.get("pending").is_some()) {
+                self.session.disarm_host_open();
+                if r.is_ok() {
+                    self.host_policy_undo = None;
+                } else {
+                    self.drop_host_open();
+                }
+            }
+            if r.is_ok() {
+                self.ui.backstage = false;
+            }
+        }
+    }
+
+    /// Whether an armed parent document still has something to wait for: its Save Changes prompt
+    /// (or another dialog), a save that is finishing, or a picker.
+    fn host_open_waiting(&self) -> bool {
+        self.dialog.is_some() || self.awaiting_save.is_some() || self.file_dialog_open()
+    }
+
+    /// Give up the armed parent document and put the earlier policy back, so a document that did
+    /// not open leaves the open one with its own policy.
+    fn drop_host_open(&mut self) {
+        self.session.disarm_host_open();
+        if let Some(before) = self.host_policy_undo.take() {
+            self.session.set_host_policy(before);
         }
     }
 
@@ -7235,6 +7367,322 @@ mod tests {
         }
         a.drain_inbox();
         assert_eq!(object_count(&mut a), 2);
+    }
+
+    /// The parent's files and the user's own files use separate inboxes: a parent file is always a
+    /// document to open (whatever its extension), and a user file never takes the parent's path.
+    #[test]
+    fn host_and_user_inboxes_are_separate() {
+        let mut a = app();
+        let (host, user): (Inbox, Inbox) = (Inbox::default(), Inbox::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.inbox = Some(user.clone());
+        // A parent file named like a picture is not inserted as one: it is read as a document
+        // (these bytes are not one, so the open fails and the document is unchanged).
+        host.lock().unwrap().push(("fake.png".into(), png_bytes([200, 30, 30, 255])));
+        a.drain_inbox();
+        assert_eq!(host.lock().unwrap().len(), 1, "the user's drain leaves the parent's inbox alone");
+        a.drain_host_inbox();
+        assert!(host.lock().unwrap().is_empty());
+        assert_eq!(object_count(&mut a), 0, "a parent file is never inserted as a picture");
+        // A parent .txt opens as a document.
+        host.lock().unwrap().push(("from-parent.txt".into(), b"from the parent".to_vec()));
+        a.drain_host_inbox();
+        assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("from the parent"));
+        // A user file is not opened by the parent's drain.
+        user.lock().unwrap().push(("mine.txt".into(), b"user file".to_vec()));
+        a.drain_host_inbox();
+        assert_eq!(user.lock().unwrap().len(), 1, "the parent's drain leaves the user's inbox alone");
+        assert!(!a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("user file"));
+    }
+
+    fn locked_app() -> WordApp {
+        let mut a = app();
+        a.session.lock_to_host();
+        a
+    }
+
+    fn body(a: &WordApp) -> String {
+        a.session.doc.plain_text(wordcraft_doc::StoryRef::Body)
+    }
+
+    /// Host mode: the parent's document opens; a picture the user picks or pastes goes into it,
+    /// while a document the user picks (or drops) is refused.
+    #[test]
+    fn host_lock_lets_the_parent_open_and_refuses_the_users_files() {
+        let mut a = locked_app();
+        let (host, user) = (Inbox::default(), Inbox::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.inbox = Some(user.clone());
+        host.lock().unwrap().push(("doc.txt".into(), b"from the parent".to_vec()));
+        a.drain_host_inbox();
+        assert!(body(&a).contains("from the parent"), "the parent's document opens under the lock");
+        // The grant is gone after that one open: a script's file.open is refused.
+        assert!(a.run("file.open", json!({"path": "doc.txt", "data": "AAAA"})).is_err());
+        // A picked document does not replace the parent's.
+        user.lock().unwrap().push(("mine.txt".into(), b"user document".to_vec()));
+        a.drain_inbox();
+        assert!(!body(&a).contains("user document") && body(&a).contains("from the parent"));
+        // A picked picture goes into the document.
+        user.lock().unwrap().push(("mine.png".into(), png_bytes([200, 30, 30, 255])));
+        a.drain_inbox();
+        assert_eq!(object_count(&mut a), 1, "a picked picture is inserted");
+        // So does a pasted one (in an app of its own: a picture already selected would be replaced).
+        let mut b = locked_app();
+        let pasted: Inbox = Inbox::default();
+        pasted.lock().unwrap().push(("p.png".into(), png_bytes([200, 30, 30, 255])));
+        b.services.pasted = Some(pasted);
+        b.canvas.focused = true;
+        b.drain_pasted();
+        assert_eq!(object_count(&mut b), 1, "a pasted picture is inserted");
+    }
+
+    /// The overrides of the parent's open message switch commands per document (print, Save As and
+    /// links on, Bold off), and a message without a policy puts every default back.
+    #[test]
+    fn host_lock_policy_comes_with_the_open_message() {
+        use wordcraft_engine::host_policy::HostPolicy;
+        let overrides = |pairs: &[(&str, bool)]| HostPolicy::new(pairs.iter().map(|(k, v)| (k.to_string(), *v)));
+        let mut a = locked_app();
+        let (host, slot) = (Inbox::default(), HostPolicySlot::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.host_policy = Some(slot.clone());
+        let refused =
+            |a: &mut WordApp, id: &str| a.run(id, json!({})).err().is_some_and(|e| e.contains(wordcraft_engine::host_policy::NOT_AVAILABLE));
+        assert!(refused(&mut a, "file.saveAs") && refused(&mut a, "ui.print") && refused(&mut a, "ui.discord"));
+        let on = [
+            ("file.print", true),
+            ("file.saveAs", true),
+            ("ui.externalLinks", true),
+            ("format.bold", false),
+            ("file.open", true),
+            ("no.suchCommand", true),
+        ];
+        slot.lock().unwrap().push_back(overrides(&on));
+        host.lock().unwrap().push(("a.txt".into(), b"one".to_vec()));
+        a.drain_host_inbox();
+        assert!(!refused(&mut a, "file.saveAs") && !refused(&mut a, "ui.print") && !refused(&mut a, "ui.discord"));
+        assert!(a.links_allowed());
+        assert!(refused(&mut a, "file.open"), "opening stays blocked whatever the policy says");
+        assert!(refused(&mut a, "tools.macros"));
+        assert!(refused(&mut a, "format.bold"), "a command the parent turned off is refused");
+        // The next document comes with no policy: everything is off again.
+        slot.lock().unwrap().push_back(HostPolicy::default());
+        host.lock().unwrap().push(("b.txt".into(), b"two".to_vec()));
+        a.drain_host_inbox();
+        assert!(refused(&mut a, "file.saveAs") && refused(&mut a, "ui.print") && !a.links_allowed());
+        assert!(!refused(&mut a, "format.bold"));
+    }
+
+    /// A parent document that arrives while changes are unsaved waits for the Save Changes
+    /// answer; Don't Save opens it, Cancel leaves the old one and drops the grant.
+    #[test]
+    fn host_lock_open_waits_for_save_changes_and_cancel_drops_the_grant() {
+        let mut a = locked_app();
+        a.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        let host = Inbox::default();
+        a.services.host_inbox = Some(host.clone());
+        host.lock().unwrap().push(("one.txt".into(), b"first".to_vec()));
+        a.drain_host_inbox();
+        assert!(a.dialog.is_some(), "the Save Changes prompt is open");
+        a.answer_save_changes(SaveChoice::Cancel).unwrap();
+        assert!(body(&a).contains("unsaved"));
+        assert!(a.run("file.open", json!({"path": "one.txt", "data": "AAAA"})).is_err(), "Cancel dropped the grant");
+        host.lock().unwrap().push(("two.txt".into(), b"second".to_vec()));
+        a.drain_host_inbox();
+        a.answer_save_changes(SaveChoice::DontSave).unwrap();
+        assert!(body(&a).contains("second"));
+    }
+
+    /// Two documents in a row: the second waits in the inbox while the first waits for the Save
+    /// Changes answer, and each opens with the policy of its own message.
+    #[test]
+    fn host_lock_documents_in_a_row_open_one_at_a_time_with_their_own_policy() {
+        use wordcraft_engine::host_policy::HostPolicy;
+        let mut a = locked_app();
+        a.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        let (host, slot) = (Inbox::default(), HostPolicySlot::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.host_policy = Some(slot.clone());
+        let printing = HostPolicy::new([("file.print".to_string(), true)]);
+        let refused =
+            |a: &mut WordApp, id: &str| a.run(id, json!({})).err().is_some_and(|e| e.contains(wordcraft_engine::host_policy::NOT_AVAILABLE));
+        slot.lock().unwrap().push_back(printing);
+        host.lock().unwrap().push(("one.txt".into(), b"first".to_vec()));
+        slot.lock().unwrap().push_back(HostPolicy::default());
+        host.lock().unwrap().push(("two.txt".into(), b"second".to_vec()));
+        a.drain_host_inbox();
+        assert!(a.dialog.is_some(), "the Save Changes prompt for the first document");
+        assert_eq!(host.lock().unwrap().len(), 1, "the second document waits");
+        assert_eq!(slot.lock().unwrap().len(), 1, "and keeps its own policy");
+        a.drain_host_inbox();
+        assert_eq!(host.lock().unwrap().len(), 1, "still waiting while the prompt is open");
+        a.answer_save_changes(SaveChoice::DontSave).unwrap();
+        assert!(body(&a).contains("first"), "the first document opened, not the second");
+        assert!(!refused(&mut a, "file.print"), "with the first message's policy");
+        a.drain_host_inbox();
+        assert!(body(&a).contains("second"));
+        assert!(host.lock().unwrap().is_empty() && slot.lock().unwrap().is_empty());
+        assert!(refused(&mut a, "file.print"), "with the second message's policy");
+    }
+
+    /// A grant that nobody waits for any more (the prompt is gone) does not stop later documents,
+    /// and a document that was cancelled leaves the open one with its own policy.
+    #[test]
+    fn host_lock_a_stale_grant_and_a_cancelled_policy_do_not_stick() {
+        use wordcraft_engine::host_policy::HostPolicy;
+        let mut a = locked_app();
+        let (host, slot) = (Inbox::default(), HostPolicySlot::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.host_policy = Some(slot.clone());
+        a.session.arm_host_open("gone.txt");
+        queue_host_file(&host, &slot, ("next.txt".into(), b"next".to_vec()), HostPolicy::default());
+        a.drain_host_inbox();
+        assert!(body(&a).contains("next"), "the stale grant did not block the next document");
+        // Cancel: the second message's policy does not stay on the first document.
+        a.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        let printing = HostPolicy::new([("file.print".to_string(), true)]);
+        queue_host_file(&host, &slot, ("two.txt".into(), b"two".to_vec()), printing);
+        a.drain_host_inbox();
+        assert!(a.dialog.is_some());
+        a.answer_save_changes(SaveChoice::Cancel).unwrap();
+        assert!(body(&a).contains("unsaved"));
+        assert!(
+            a.run("file.print", json!({})).err().is_some_and(|e| e.contains(wordcraft_engine::host_policy::NOT_AVAILABLE)),
+            "back to the first document's policy"
+        );
+    }
+
+    /// A parent document that fails to open after "Don't Save" gives the earlier policy back.
+    #[test]
+    fn host_lock_a_failed_open_after_dont_save_restores_the_policy() {
+        use wordcraft_engine::host_policy::HostPolicy;
+        let mut a = locked_app();
+        let (host, slot) = (Inbox::default(), HostPolicySlot::default());
+        a.services.host_inbox = Some(host.clone());
+        a.services.host_policy = Some(slot.clone());
+        a.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        // Not valid .docx content, so the open fails once the changes are discarded.
+        queue_host_file(&host, &slot, ("bad.docx".into(), b"not a zip".to_vec()), HostPolicy::new([("file.print".to_string(), true)]));
+        a.drain_host_inbox();
+        assert!(a.dialog.is_some());
+        let _ = a.answer_save_changes(SaveChoice::DontSave);
+        assert!(
+            a.run("file.print", json!({})).err().is_some_and(|e| e.contains(wordcraft_engine::host_policy::NOT_AVAILABLE)),
+            "the failed document's policy was given back"
+        );
+        assert!(a.host_policy_undo.is_none() && !a.session.host_open_pending());
+    }
+
+    /// The queue keeps the newest few documents, each with its own policy.
+    #[test]
+    fn host_queue_drops_the_oldest_over_the_limit() {
+        use wordcraft_engine::host_policy::HostPolicy;
+        let (host, slot) = (Inbox::default(), HostPolicySlot::default());
+        for i in 0..MAX_HOST_QUEUE + 3 {
+            queue_host_file(&host, &slot, (format!("{i}.txt"), vec![]), HostPolicy::new([("file.print".to_string(), i == 3)]));
+        }
+        let files = host.lock().unwrap();
+        assert_eq!(files.len(), MAX_HOST_QUEUE);
+        assert_eq!(files[0].0, "3.txt");
+        assert_eq!(slot.lock().unwrap().len(), MAX_HOST_QUEUE);
+        // The first policy left is the fourth one (the only one that switched printing on).
+        assert!(slot.lock().unwrap()[0].command_on("file.print"));
+        assert!(!slot.lock().unwrap()[1].command_on("file.print"));
+    }
+
+    /// Host mode: each platform function that reaches the user's machine is closed.
+    #[test]
+    fn host_lock_closes_file_dialogs_pickers_and_menu_entries() {
+        let mut a = locked_app();
+        // The PPM interface is always Korean: a stored or asked-for language changes nothing.
+        a.ui.language = "ko".into();
+        assert!(a.run("ui.language", json!({"value": "en"})).is_err());
+        assert_eq!(a.ui.language, "ko");
+        // Review > Language > Language Preferences… opens the Language pane; no way to a language is left there.
+        a.run("file.options", json!({"pane": "language"})).unwrap();
+        for value in ["en", "auto", "de"] {
+            assert!(a.run("ui.language", json!({"value": value})).is_err(), "{value}");
+        }
+        assert_eq!(a.ui.language, "ko");
+        for id in ["file.new", "file.open", "file.saveAs", "file.exportPdf", "file.print", "file.rename", "tools.recordMacro", "tools.macros"] {
+            assert!(a.run(id, json!({})).is_err(), "{id} is refused");
+            assert!(a.execute(id, json!({})).is_err(), "{id} is refused by execute");
+        }
+        for id in ["ui.openFileDialog", "ui.print", "ui.discord", "ui.fileBrowser", "ui.startScreen"] {
+            assert!(a.run(id, json!({})).is_err(), "{id} is refused");
+        }
+        assert!(a.run("ui.dialog", json!({"name": "renameDocument"})).is_err());
+        // The password dialog and the Restrict Editing pane are closed too, by name and by command.
+        for name in ["encryptPassword", "restrictEditing"] {
+            assert!(a.run("ui.dialog", json!({"name": name})).is_err(), "{name}");
+            assert!(dialogs::Dialog::open(name, &mut a).is_none() || a.run("ui.dialog", json!({"name": name})).is_err(), "{name}");
+        }
+        for id in ["review.restrict", "file.protect", "file.encrypt", "file.properties", "file.info"] {
+            assert!(a.run(id, json!({})).is_err(), "{id} is refused");
+            assert!(a.run(id, json!({"mode": "readOnly", "password": "x"})).is_err(), "{id} with settings is refused");
+            assert!(a.execute(id, json!({})).is_err(), "{id} is refused by execute");
+        }
+        assert!(!a.restrict.open && a.dialog.is_none() && a.session.doc.settings.protection.is_none());
+        assert!(a.run("ui.backstage", json!({"value": true, "page": "open"})).is_err());
+        assert!(a.run("ui.backstage", json!({"value": true, "page": "info"})).is_err(), "Info is hidden in PPM");
+        assert!(a.run("ui.backstage", json!({"value": true, "page": "options"})).is_ok());
+        assert!(matches!(
+            a.ask_file(file_dialogs::FileDialogRequest::Open { purpose: "document".into() }, file_dialogs::AfterPick::OpenDocument),
+            file_dialogs::Asked::Done(Err(_))
+        ));
+        assert!(dialogs::Dialog::open("renameDocument", &mut a).is_none());
+        assert!(!a.links_allowed(), "links are off without the policy");
+        a.open_dialog();
+        assert!(!a.file_dialog_open());
+        // A file to put into the document may be asked for; a document to open or a file to save
+        // to may not (until the policy says so).
+        let picked = file_dialogs::FileDialogRequest::Open { purpose: "picture".into() };
+        assert!(!matches!(a.ask_file(picked, file_dialogs::AfterPick::Picture), file_dialogs::Asked::Done(Err(_))));
+        let save = file_dialogs::FileDialogRequest::Save { name: "x.docx".into() };
+        assert!(matches!(a.ask_file(save, file_dialogs::AfterPick::Export { ext: "pdf".into() }), file_dialogs::Asked::Done(Err(_))));
+        // Editing and the plain save still work.
+        assert!(a.run("text.insert", json!({"text": "hi"})).is_ok());
+        assert!(!widgets::enabled(&a, "file.saveAs"));
+        // Without the lock the same ids are not refused by it.
+        let mut free = app();
+        assert!(free.host_refusal("file.saveAs", &Value::Null).is_ok());
+        assert!(free.run("ui.backstage", json!({"value": true, "page": "open"})).is_ok());
+    }
+
+    /// Host mode hides the entries of the blocked features: the Restrict Editing button (as the
+    /// Review ribbon draws it, by `widgets::big`) takes no room, and Info is missing from the
+    /// File tab's navigation; an unlocked app shows both.
+    #[test]
+    fn host_lock_hides_restrict_editing_and_info() {
+        use egui_kittest::kittest::Queryable;
+        for locked in [true, false] {
+            let mut a = app();
+            if locked {
+                a.session.lock_to_host();
+            }
+            let width = std::cell::Cell::new(-1.0_f32);
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                    let r = widgets::big(ui, app, "restrict", "Restrict\nEditing", "review.restrict", json!({}), false);
+                    width.set(r.rect.width());
+                },
+                a,
+            );
+            h.run_steps(4);
+            assert_eq!(width.get() > 1.0, !locked, "Restrict Editing button (locked: {locked})");
+            // The Review ▸ Protect group is drawn only while one of its commands is allowed.
+            let shown = ["review.blockAuthors", "review.restrict"].iter().any(|id| h.state().host_refusal(id, &json!({})).is_ok());
+            assert_eq!(shown, !locked, "Protect group (locked: {locked})");
+            h.state_mut().run("ui.backstage", json!({"value": true, "page": "options"})).unwrap();
+            h.run_steps(6);
+            let nav = |h: &egui_kittest::Harness<'_, WordApp>, l: &str| h.query_by_role_and_label(egui::accesskit::Role::Button, l).is_some();
+            assert!(nav(&h, "Options"), "the nav is shown");
+            assert_eq!(nav(&h, "Info"), !locked, "Info nav item (locked: {locked})");
+        }
     }
 
     /// With a Drawing Canvas selected, every image of the drop goes into it (#1592).

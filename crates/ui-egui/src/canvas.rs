@@ -3094,6 +3094,10 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.set_min_width(220.0);
     let item = |ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value| {
+        // Host mode: an item for a command the lock refuses is not drawn.
+        if app.host_refusal(id, &params).is_err() {
+            return;
+        }
         let sc = crate::widgets::shortcut_text(app, id);
         let on = crate::widgets::enabled(app, id);
         if ui.add_enabled(on, egui::Button::new(tl!(label)).shortcut_text(sc)).clicked() {

@@ -9,6 +9,10 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# The PPM build (ppm/build-web.sh): always host mode, locked to the parent page (`launch`).
+ppm-host = ["wordcraft-fonts/ppm-host"]
+
 [[bin]]
 name = "wordcraft-web"
 path = "src/main.rs"
