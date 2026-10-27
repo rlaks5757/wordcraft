@@ -334,6 +334,10 @@ pub struct FontDb {
     /// (Thai, #59) got slower with every font loaded.
     fallbacks: RwLock<FallbackCache>,
     run_fallbacks: RwLock<RunFallbackCache>,
+    /// The bundled fallback-family faces an uploaded font of the same name replaced
+    /// ([`FontDb::install_uploaded_font`]): the last resort of [`FontDb::face`] stays the
+    /// bundled font, so names nothing has don't draw in the upload.
+    replaced_fallback: RwLock<Vec<Arc<FontFace>>>,
     #[cfg(not(target_arch = "wasm32"))]
     catalog: RwLock<Vec<CatalogEntry>>,
     /// Fonts the user added at run time, and the folder they are stored in (#582).
@@ -974,6 +978,7 @@ impl FontDb {
             outlines: Mutex::new(HashMap::new()),
             fallbacks: RwLock::new(FallbackCache::default()),
             run_fallbacks: RwLock::new(RunFallbackCache::default()),
+            replaced_fallback: RwLock::default(),
             #[cfg(not(target_arch = "wasm32"))]
             catalog: RwLock::new(Vec::new()),
             user: RwLock::new(user::UserFonts::default()),
@@ -1300,6 +1305,13 @@ impl FontDb {
                 if let Some(f) = self.find(&en, style) {
                     return f;
                 }
+            }
+        }
+        {
+            let kept = self.replaced_fallback.read().unwrap_or_else(|e| e.into_inner());
+            let pick = |style: &str| kept.iter().find(|f| norm(&f.style) == norm(style)).cloned();
+            if let Some(f) = pick(style).or_else(|| pick("Regular")) {
+                return f;
             }
         }
         self.find(FALLBACK_FAMILY, style)

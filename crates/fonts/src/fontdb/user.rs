@@ -246,7 +246,9 @@ impl FontDb {
     /// Add the font file `bytes` for a host page that names its family (the admin's font list),
     /// and let it win: its faces go by `family` (as well as their own names), and a face of the
     /// same family and style that is already loaded, a bundled one included, is replaced by it, as
-    /// a `FontFace` the page registers beats an installed font in a browser. Lookups made before
+    /// a `FontFace` the page registers beats an installed font in a browser. The file's own
+    /// typographic family still finds it, but a legacy family name it had ("Roboto Light") does not.
+    /// A replaced bundled fallback face stays what [`FontDb::face`] falls back to. Lookups made before
     /// are forgotten ([`FontDb::generation`]). Kept for this run only, not listed as a user font.
     /// Returns how many faces went in.
     pub fn install_uploaded_font(&self, family: &str, bytes: &[u8]) -> Result<usize, UserFontError> {
@@ -275,8 +277,9 @@ impl FontDb {
                 return Err(UserFontError::Unusable(format!("{label} maps no characters")));
             }
             face.local_names = f.local;
-            // The page's name is the one documents and the font list use; the file's own stays as
-            // a second name through the legacy family when it differs.
+            // The page's name is the one documents and the font list use; the file's own typographic
+            // family stays as the legacy family, which `find` tries only when no typographic family
+            // matches. A legacy family the file had of its own is no longer a name for it.
             if !face.family.eq_ignore_ascii_case(&family) {
                 face.legacy_family = face.family.clone();
                 face.family.clone_from(&family);
@@ -286,7 +289,19 @@ impl FontDb {
         let count = new.len();
         {
             let mut faces = self.faces.write().unwrap_or_else(|e| e.into_inner());
-            faces.retain(|g| !new.iter().any(|f| g.family.eq_ignore_ascii_case(&f.family) && g.style.eq_ignore_ascii_case(&f.style)));
+            let (gone, kept): (Vec<_>, Vec<_>) =
+                faces.drain(..).partition(|g| new.iter().any(|f| g.family.eq_ignore_ascii_case(&f.family) && g.style.eq_ignore_ascii_case(&f.style)));
+            *faces = kept;
+            // A replaced bundled fallback face stays the last resort of `face()`: only text that
+            // names the upload gets it, as with a `FontFace` in a browser. A second upload keeps
+            // the first one's record (the bundled face, not the earlier upload).
+            let mut baseline = self.replaced_fallback.write().unwrap_or_else(|e| e.into_inner());
+            for g in gone.into_iter().filter(|g| g.family.eq_ignore_ascii_case(super::FALLBACK_FAMILY)) {
+                if !baseline.iter().any(|b| b.style.eq_ignore_ascii_case(&g.style)) {
+                    baseline.push(g);
+                }
+            }
+            drop(baseline);
             faces.extend(new);
         }
         self.fonts_changed();
@@ -668,6 +683,10 @@ pub(crate) mod tests {
         // The page's name finds it, and so does the file's own.
         assert!(db.has_family("Source Sans 3") && db.has_family(FAMILY));
         assert_eq!(db.face(FAMILY, "Regular").id(), after.id());
+        // Names nothing has still draw in the bundled fallback, not in the upload.
+        let unknown = db.face("No Such Font", "Regular");
+        assert_ne!(unknown.id(), after.id());
+        assert_eq!(unknown.id(), before);
         assert!(matches!(db.install_uploaded_font(" ", &bytes), Err(UserFontError::Unusable(_))));
     }
 
