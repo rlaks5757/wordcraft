@@ -414,6 +414,10 @@ impl WordApp {
 
     /// Pick a font file to add (Add Font…; web: it arrives through the inbox).
     pub(crate) fn pick_font(&mut self) {
+        // A host-locked page takes its fonts from the host, never from the user's files.
+        if self.session.is_host_locked() {
+            return;
+        }
         if let Some(f) = &self.services.open_async {
             f("font");
             return;
@@ -423,6 +427,10 @@ impl WordApp {
 
     /// Request loading local system installed fonts (web: queryLocalFonts).
     pub(crate) fn load_system_fonts(&mut self) {
+        // The browser's local font list is never queried by a host-locked page.
+        if self.session.is_host_locked() {
+            return;
+        }
         if let Some(f) = &self.services.load_system_fonts {
             f();
         } else {
@@ -960,6 +968,27 @@ mod tests {
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
         a.run("font.loadSystem", json!({})).unwrap();
         assert!(called.get());
+    }
+
+    /// Host-locked: the user's own fonts and the browser's local font list are never reached,
+    /// by the command, the control channel or the pickers themselves.
+    #[test]
+    fn a_host_locked_page_never_asks_for_the_users_fonts() {
+        use std::cell::Cell;
+        let called = Rc::new(Cell::new(0));
+        let (c1, c2) = (called.clone(), called.clone());
+        let services = Services {
+            load_system_fonts: Some(Box::new(move || c1.set(c1.get() + 1))),
+            open_async: Some(Box::new(move |_| c2.set(c2.get() + 1))),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+        a.session.lock_to_host();
+        assert!(a.run("font.loadSystem", json!({})).is_err());
+        assert!(a.run("font.add", json!({})).is_err());
+        a.pick_font();
+        a.load_system_fonts();
+        assert_eq!(called.get(), 0, "neither the file picker nor queryLocalFonts is started");
     }
 
     #[test]

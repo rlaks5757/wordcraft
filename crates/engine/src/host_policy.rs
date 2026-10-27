@@ -45,7 +45,7 @@ const ALLOWED: &[&str] = &[
     "equation.insertSymbol", "equation.justify", "equation.move", "equation.normalText", "equation.number", "equation.set", "equation.structure",
     "equation.structureActions", "equation.type", "fields.lock", "fields.next", "fields.previous", "fields.selected", "fields.setCode",
     "fields.toggleCode", "fields.unlink", "fields.unlock", "file.accessibility", "file.compatibility", "file.inspect", "file.options",
-    "file.privacy", "file.privacyOptions", "file.save", "file.setAuthor", "font.add", "font.list", "font.loadSystem", "font.remove",
+    "file.privacy", "file.privacyOptions", "file.save", "file.setAuthor", "font.list", "font.remove",
     "format.allCaps", "format.bold", "format.border", "format.changeCase", "format.charStyle", "format.clear", "format.color",
     "format.doubleStrikethrough", "format.doubleUnderline", "format.emboss", "format.enclose", "format.engrave", "format.font", "format.fontDialog",
     "format.growFont", "format.growFont1", "format.hidden", "format.highlight", "format.italic", "format.outline", "format.phonetic",
@@ -125,7 +125,7 @@ const ALLOWED: &[&str] = &[
 #[rustfmt::skip]
 const LOCKED: &[&str] = &[
     "file.autosave", "file.close", "file.encrypt", "file.info", "file.new", "file.newFromTemplate", "file.open", "file.properties", "file.protect", "file.recover", "file.rename", "file.share", "file.versions",
-    "review.restrict", "tools.macros", "tools.recordMacro", "view.newWindow",
+    "font.add", "font.loadSystem", "review.restrict", "tools.macros", "tools.recordMacro", "view.newWindow",
 ];
 
 /// Commands that are off until the parent's policy turns them on: printing, Save As and export.
@@ -391,8 +391,6 @@ mod tests {
             "insert.object",
             "insert.spreadsheet",
             "picture.change",
-            "font.loadSystem",
-            "font.add",
             "font.remove",
             "review.compare",
             "review.combine",
@@ -437,6 +435,22 @@ mod tests {
         assert!(!p.command_on("format.bold"));
         let many = (0..MAX_OVERRIDES + 10).map(|i| (format!("id{i}"), Some(true)));
         assert_eq!(HostPolicy::from_entries(many).overrides.len(), MAX_OVERRIDES);
+    }
+
+    /// A user's own fonts (Add Font, Load System Installed Fonts) are locked: the host page brings
+    /// the fonts (`wordcraft:add-fonts`), as /builder lets only the administrator's list in.
+    #[test]
+    fn a_users_own_fonts_are_locked_for_every_policy() {
+        let mut s = locked();
+        for pol in [HostPolicy::default(), overrides(&[("font.add", true), ("font.loadSystem", true)])] {
+            s.set_host_policy(pol);
+            for (id, params) in [("font.add", json!({})), ("font.add", json!({"name": "x.ttf", "data": ""})), ("font.loadSystem", json!({}))] {
+                let r = s.run(id, &params);
+                assert!(matches!(r, Err(CmdError::Disabled(_))), "{id}: {r:?}");
+            }
+        }
+        assert_eq!(grade("font.add"), Some(Grade::Locked));
+        assert_eq!(grade("font.loadSystem"), Some(Grade::Locked));
     }
 
     /// Encrypting is locked: a password set there would be applied by the next plain Save and

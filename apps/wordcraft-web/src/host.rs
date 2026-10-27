@@ -293,6 +293,7 @@ impl Bridge {
                 }
             }
         }
+        log::info!("add-fonts {id}: installed {installed:?}, failed {failed:?}");
         let strings = |v: Vec<String>| v.into_iter().map(JsValue::from).collect::<js_sys::Array>();
         self.send(&[
             ("type", "wordcraft:fonts-added".into()),

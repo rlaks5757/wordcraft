@@ -1136,6 +1136,8 @@ impl WordApp {
     /// Fonts were added or removed (a command, the web shell loading stored fonts): lay out
     /// again and refresh the font lists and their previews.
     fn watch_fonts(&mut self, ctx: &egui::Context) {
+        // The font lists read this: a host-locked page offers no way to bring one's own fonts.
+        widgets::set_host_locked(ctx, self.session.is_host_locked());
         let db = wordcraft_fonts::FontDb::global();
         let generation = db.generation();
         if generation == self.font_generation {

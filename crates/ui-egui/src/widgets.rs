@@ -741,6 +741,17 @@ pub fn combo_hint(
     combo_impl(ui, id, width, current, items, &[], preview, false, tip)
 }
 
+/// Tell the lists whether the page is locked to its host (PPM): the font lists then leave out
+/// Add Font… and Load System Installed Fonts… (the host brings the fonts) and always show their
+/// scroll bar, so a list cut at its height is seen to go on.
+pub fn set_host_locked(ctx: &egui::Context, locked: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("host_locked_lists"), locked));
+}
+
+fn host_locked(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::new("host_locked_lists"))).unwrap_or(false)
+}
+
 /// What [`font_combo`] returns when its list's last entry, Add Font…, is chosen (#582): the
 /// caller runs `font.add`, which shows a file picker. Not a family name anyone can type.
 pub const ADD_FONT: &str = "\u{1}font.add";
@@ -811,6 +822,11 @@ pub fn font_matches(query: &str, items: &[String]) -> Vec<usize> {
         } else if name.starts_with(&q) {
             prefix.push(i);
         } else if name.contains(&q) {
+            inner.push(i);
+        } else if !it.is_ascii()
+            // A name shown in the interface language (나눔고딕) is found by its English name too (Nanum).
+            && wordcraft_fonts::FontDb::global().english_family(it).is_some_and(|en| en.to_lowercase().contains(&q))
+        {
             inner.push(i);
         }
     }
@@ -965,7 +981,7 @@ fn combo_impl(
                 out = Some(v);
                 ui.close();
             }
-            if search {
+            if search && !host_locked(ui.ctx()) {
                 ui.separator();
                 if ui.button(tl!("Add Font…")).clicked() {
                     out = Some(ADD_FONT.to_string());
@@ -1118,6 +1134,9 @@ fn list_rows<'a>(
     let desired_h = (n as f32 * (row_h + ui.spacing().item_spacing.y)).min(420.0);
     ui.set_min_height(desired_h);
     let mut area = egui::ScrollArea::vertical().max_height(desired_h);
+    if host_locked(ui.ctx()) {
+        area = area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
+    }
     if let (Some(h), Some((offset, view_h))) = (highlight, scroll) {
         let top = h as f32 * (row_h + ui.spacing().item_spacing.y);
         let bottom = top + row_h;
@@ -1566,6 +1585,18 @@ mod tests {
         assert_eq!(after.2, w.inactive.weak_bg_fill);
         frame(vec![press(frameless.center(), true)]);
         assert_eq!(settle().3, t.pressed);
+    }
+
+    /// A family shown by its local name is also found by its English name.
+    #[test]
+    fn font_matches_finds_a_local_name_by_its_english_name() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ppm/fonts-ko/fonts/nanum-gothic/NanumGothic-Regular.ttf");
+        let bytes = std::fs::read(path).unwrap();
+        wordcraft_fonts::FontDb::global().install_uploaded_font("NanumGothic", &bytes).unwrap();
+        let items: Vec<String> = ["Arial", "나눔고딕", "Calibri"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(font_matches("nanum", &items), vec![1]);
+        assert_eq!(font_matches("나눔", &items), vec![1]);
+        assert!(font_matches("zapfino", &items).is_empty());
     }
 
     #[test]
