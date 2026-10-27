@@ -243,6 +243,56 @@ impl FontDb {
         Ok(Installed { font, warning })
     }
 
+    /// Add the font file `bytes` for a host page that names its family (the admin's font list),
+    /// and let it win: its faces go by `family` (as well as their own names), and a face of the
+    /// same family and style that is already loaded, a bundled one included, is replaced by it, as
+    /// a `FontFace` the page registers beats an installed font in a browser. Lookups made before
+    /// are forgotten ([`FontDb::generation`]). Kept for this run only, not listed as a user font.
+    /// Returns how many faces went in.
+    pub fn install_uploaded_font(&self, family: &str, bytes: &[u8]) -> Result<usize, UserFontError> {
+        let family: String = family.trim().chars().take(super::MAX_FAMILY_NAME).collect();
+        if family.is_empty() {
+            return Err(UserFontError::Unusable("no family name".into()));
+        }
+        let sfnt = decode_font_file(bytes)?;
+        if FileRef::new(&sfnt).is_err() {
+            return Err(UserFontError::Unusable("not a valid OpenType file".into()));
+        }
+        let found = enumerate_faces(&sfnt);
+        if found.is_empty() {
+            return Err(UserFontError::Unusable("no face with a family name".into()));
+        }
+        if found.len() > MAX_FACES_PER_FILE {
+            return Err(UserFontError::Unusable(format!("more than {MAX_FACES_PER_FILE} faces")));
+        }
+        let data = Arc::new(sfnt);
+        let mut new = Vec::new();
+        for f in found {
+            let label = format!("{} {}", f.family, f.style);
+            let mut face = make_face(FontBytes::Owned(data.clone()), f.index, f.family, f.style, f.legacy, f.coords)
+                .ok_or_else(|| UserFontError::Unusable(format!("{label} doesn't parse")))?;
+            if face.skrifa().is_none_or(|s| s.charmap().mappings().next().is_none()) {
+                return Err(UserFontError::Unusable(format!("{label} maps no characters")));
+            }
+            face.local_names = f.local;
+            // The page's name is the one documents and the font list use; the file's own stays as
+            // a second name through the legacy family when it differs.
+            if !face.family.eq_ignore_ascii_case(&family) {
+                face.legacy_family = face.family.clone();
+                face.family.clone_from(&family);
+            }
+            new.push(Arc::new(face));
+        }
+        let count = new.len();
+        {
+            let mut faces = self.faces.write().unwrap_or_else(|e| e.into_inner());
+            faces.retain(|g| !new.iter().any(|f| g.family.eq_ignore_ascii_case(&f.family) && g.style.eq_ignore_ascii_case(&f.style)));
+            faces.extend(new);
+        }
+        self.fonts_changed();
+        Ok(count)
+    }
+
     /// Add the fonts a document embeds (#1171) for this run: not recorded as user fonts, never
     /// stored. Faces already available are kept. Lookups made while the family was missing are
     /// forgotten ([`FontDb::generation`]), so text set in it now resolves to it. Each file comes
@@ -602,6 +652,23 @@ pub(crate) mod tests {
         assert!(g != 0);
         assert_eq!(face.advance(g), src.advance(src.glyph_for('W')));
         assert_eq!(db.user_fonts().len(), 1);
+    }
+
+    #[test]
+    fn an_uploaded_font_replaces_a_loaded_one_of_the_same_family_and_style() {
+        let db = db();
+        let before = db.face("Source Sans 3", "Regular").id();
+        let gen0 = db.generation();
+        // Another family's file sent as "Source Sans 3": it takes the bundled face's place.
+        let bytes = renamed("SourceSans3-Regular.ttf", FAMILY);
+        assert_eq!(db.install_uploaded_font("Source Sans 3", &bytes).unwrap(), 1);
+        assert!(db.generation() > gen0);
+        let after = db.face("Source Sans 3", "Regular");
+        assert_ne!(after.id(), before);
+        // The page's name finds it, and so does the file's own.
+        assert!(db.has_family("Source Sans 3") && db.has_family(FAMILY));
+        assert_eq!(db.face(FAMILY, "Regular").id(), after.id());
+        assert!(matches!(db.install_uploaded_font(" ", &bytes), Err(UserFontError::Unusable(_))));
     }
 
     #[test]

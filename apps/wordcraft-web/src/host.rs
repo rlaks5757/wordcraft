@@ -29,9 +29,11 @@
 //!   error text of the failed save.
 //! - `wordcraft:add-fonts` (from the parent): `{ id, fonts: [{ family, bytes, format }] }`, each
 //!   font file (`format` `"ttf"` or `"otf"`; the file's own data decides) added to the font list and
-//!   the layout, before or after a document opens. A family sent before is not added twice.
-//! - `wordcraft:fonts-added` (to the parent): `{ id, installed, failed }`, family names. A family
-//!   whose faces the app already has (a bundled font of the same name) is in `failed`.
+//!   the layout, before or after a document opens. The font goes by `family` (and by its own
+//!   names), and replaces a loaded face of the same family and style, a bundled one too, like a
+//!   `FontFace` in the parent page. A family sent before is not added twice.
+//! - `wordcraft:fonts-added` (to the parent): `{ id, installed, failed }`, family names.
+//!   `installed` means the uploaded font is the one drawn; `failed` fonts are unusable.
 //! - Ctrl/Cmd+S sends `wordcraft:save` as File › Save does and never opens the browser's own
 //!   "save page" dialog.
 //!
@@ -58,6 +60,9 @@ const MAX_PENDING_TABLES: usize = 16;
 
 /// The longest request id taken from the parent.
 const MAX_ID_BYTES: usize = 200;
+
+/// The longest purpose text echoed back to the parent.
+const MAX_PURPOSE_CHARS: usize = 200;
 
 /// Most byte requests waiting for the next frame; more are dropped.
 const MAX_PENDING_BYTES: usize = 16;
@@ -210,22 +215,24 @@ impl Bridge {
                 self.bytes_failed(&id, &purpose_text, "not-ready");
                 continue;
             }
-            let file = if purpose == Purpose::Save {
+            let is_save = purpose == Purpose::Save;
+            let file = if is_save {
                 self.capturing.set(true);
                 let saved = app.run("file.save", serde_json::json!({}));
                 self.capturing.set(false);
                 let captured = self.captured.borrow_mut().take();
-                saved.and_then(|_| captured.ok_or_else(|| "the save produced no file".to_string()))
+                saved.map_err(|e| e.to_string()).and_then(|_| captured.ok_or_else(|| "the save produced no file".to_string()))
             } else {
                 app.snapshot_bytes()
             };
-            match file {
-                Ok((name, bytes)) => {
-                    if let Err(e) = self.post_bytes(&id, &purpose_text, &name, &bytes) {
-                        self.bytes_failed(&id, &purpose_text, &e);
-                    }
+            let sent = file.and_then(|(name, bytes)| self.post_bytes(&id, &purpose_text, &name, &bytes));
+            if let Err(e) = sent {
+                // The save marked the document saved before the file went out: the parent never
+                // got it, so the document has unsaved changes again.
+                if is_save {
+                    app.mark_unsaved();
                 }
-                Err(e) => self.bytes_failed(&id, &purpose_text, &e),
+                self.bytes_failed(&id, &purpose_text, &e);
             }
         }
     }
@@ -274,10 +281,8 @@ impl Bridge {
                 continue;
             };
             total += bytes.len();
-            let ext = if string(&font, "format").as_deref() == Some("otf") { "otf" } else { "ttf" };
-            // The stored name only labels the file; characters that make paths are dropped.
-            let stem: String = family.chars().filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_')).collect();
-            match wordcraft_fonts::FontDb::global().install_font(&format!("{stem}.{ext}"), &bytes) {
+            // The font goes by the parent's family name and wins over a loaded font of that name.
+            match wordcraft_fonts::FontDb::global().install_uploaded_font(&family, &bytes) {
                 Ok(_) => {
                     self.fonts.borrow_mut().insert(family.to_lowercase());
                     installed.push(family);
@@ -301,7 +306,7 @@ impl Bridge {
     /// canvas hears; this also covers focus elsewhere in the frame. The app still gets the key.
     fn block_page_save(&self) {
         let on_key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(|event: web_sys::KeyboardEvent| {
-            if (event.ctrl_key() || event.meta_key()) && event.key().eq_ignore_ascii_case("s") {
+            if (event.ctrl_key() || event.meta_key()) && (event.code() == "KeyS" || event.key().eq_ignore_ascii_case("s")) {
                 event.prevent_default();
             }
         });
@@ -358,7 +363,7 @@ impl Bridge {
                 }
                 Some("wordcraft:request-bytes") => {
                     let Some(id) = string(&data, "id").filter(|id| !id.is_empty() && id.len() <= MAX_ID_BYTES) else { return };
-                    let purpose_text = string(&data, "purpose").unwrap_or_default();
+                    let purpose_text: String = string(&data, "purpose").unwrap_or_default().chars().take(MAX_PURPOSE_CHARS).collect();
                     if byte_requests.borrow().len() < MAX_PENDING_BYTES {
                         let purpose = Purpose::parse(&purpose_text);
                         byte_requests.borrow_mut().push(BytesRequest { id, purpose_text, purpose });

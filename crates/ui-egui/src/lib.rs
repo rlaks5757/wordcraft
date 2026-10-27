@@ -1935,7 +1935,18 @@ impl WordApp {
     /// so [`Self::snapshot_bytes`] is the document the parent expects.
     pub fn host_document_ready(&self) -> bool {
         let waiting = self.services.host_inbox.as_ref().is_some_and(|i| !i.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
-        self.host_opened && !waiting && !self.session.host_open_pending() && self.dialog.is_none()
+        // Only the prompts an opening waits on count; Find, Zoom and the like leave the document as it is.
+        let opening = matches!(
+            self.dialog,
+            Some(dialogs::Dialog::SaveChanges { .. } | dialogs::Dialog::Password { .. } | dialogs::Dialog::DiscardRecovery { .. })
+        );
+        self.host_opened && !waiting && !self.session.host_open_pending() && !opening
+    }
+
+    /// Host mode: take back a save whose file never reached the parent, so the document is
+    /// reported as having unsaved changes again.
+    pub fn mark_unsaved(&mut self) {
+        self.session.dirty = true;
     }
 
     /// The document as Save would write it (name and bytes), without touching the document: no
@@ -7436,6 +7447,11 @@ mod tests {
         let (name, bytes) = a.snapshot_bytes().unwrap();
         assert!(name.ends_with(".docx") && bytes.starts_with(b"PK"), "{name}");
         assert!(a.session.dirty, "a snapshot is not a save");
+        a.session.dirty = false;
+        a.mark_unsaved();
+        assert!(a.session.dirty);
+        a.dialog = Some(dialogs::Dialog::Zoom { percent: 100.0 });
+        assert!(a.host_document_ready(), "a Zoom dialog doesn't hold up a snapshot");
     }
 
     fn locked_app() -> WordApp {
