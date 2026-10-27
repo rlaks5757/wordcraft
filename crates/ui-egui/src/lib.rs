@@ -639,6 +639,8 @@ pub struct WordApp {
     /// Host mode: the policy in force before a parent document's own policy was set, put back if
     /// that document is not opened (Save Changes cancelled, or ended without opening).
     host_policy_undo: Option<wordcraft_engine::host_policy::HostPolicy>,
+    /// Host mode: a document from the parent has opened (the blank start document doesn't count).
+    host_opened: bool,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
@@ -743,6 +745,7 @@ impl WordApp {
             saves_in_flight: Vec::new(),
             awaiting_save: None,
             host_policy_undo: None,
+            host_opened: false,
             change_picture_target: None,
             recipient_list_pending: false,
             font_generation: wordcraft_fonts::FontDb::global().generation(),
@@ -1133,6 +1136,8 @@ impl WordApp {
     /// Fonts were added or removed (a command, the web shell loading stored fonts): lay out
     /// again and refresh the font lists and their previews.
     fn watch_fonts(&mut self, ctx: &egui::Context) {
+        // The font lists read this: a host-locked page offers no way to bring one's own fonts.
+        widgets::set_host_locked(ctx, self.session.is_host_locked());
         let db = wordcraft_fonts::FontDb::global();
         let generation = db.generation();
         if generation == self.font_generation {
@@ -1223,7 +1228,10 @@ impl WordApp {
         let r = self.execute(id, params);
         if armed {
             match &r {
-                Ok(_) => self.host_policy_undo = None,
+                Ok(v) => {
+                    self.host_policy_undo = None;
+                    self.host_opened |= v.get("pending").is_none();
+                }
                 Err(e) if !wordcraft_engine::io::needs_password(e) => self.drop_host_open(),
                 Err(_) => {}
             }
@@ -1923,6 +1931,34 @@ impl WordApp {
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("doc") || e.eq_ignore_ascii_case("dot"))
+    }
+
+    /// Host mode: whether the parent's document is open and no other one is waiting to replace it,
+    /// so [`Self::snapshot_bytes`] is the document the parent expects.
+    pub fn host_document_ready(&self) -> bool {
+        let waiting = self.services.host_inbox.as_ref().is_some_and(|i| !i.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+        // Only the prompts an opening waits on count; Find, Zoom and the like leave the document as it is.
+        let opening = matches!(
+            self.dialog,
+            Some(dialogs::Dialog::SaveChanges { .. } | dialogs::Dialog::Password { .. } | dialogs::Dialog::DiscardRecovery { .. })
+        );
+        self.host_opened && !waiting && !self.session.host_open_pending() && !opening
+    }
+
+    /// Host mode: take back a save whose file never reached the parent, so the document is
+    /// reported as having unsaved changes again.
+    pub fn mark_unsaved(&mut self) {
+        self.session.dirty = true;
+    }
+
+    /// The document as Save would write it (name and bytes), without touching the document: no
+    /// save stamp, no password change, the unsaved-changes state stays as it is.
+    pub fn snapshot_bytes(&self) -> Result<(String, Vec<u8>), String> {
+        let name = self.default_save_name();
+        let password = self.session.password.as_ref().map(wordcraft_engine::Password::as_str);
+        let opts = wordcraft_engine::cmd::file::export_options(&self.session, &json!({}));
+        let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?;
+        Ok((name, bytes))
     }
 
     /// The name Save suggests: the open file's own Word format (so a .docm keeps its macros),
@@ -7394,6 +7430,30 @@ mod tests {
         a.drain_host_inbox();
         assert_eq!(user.lock().unwrap().len(), 1, "the parent's drain leaves the user's inbox alone");
         assert!(!a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("user file"));
+    }
+
+    /// A byte request from the parent: not ready before its document opened, and a snapshot
+    /// reads the document without saving it.
+    #[test]
+    fn host_snapshot_waits_for_the_parent_document_and_leaves_the_state_alone() {
+        let mut a = app();
+        let host = Inbox::default();
+        a.services.host_inbox = Some(host.clone());
+        assert!(!a.host_document_ready(), "the blank start document is not the parent's");
+        host.lock().unwrap().push(("from-parent.txt".into(), b"from the parent".to_vec()));
+        assert!(!a.host_document_ready(), "still waiting in the inbox");
+        a.drain_host_inbox();
+        assert!(a.host_document_ready());
+        a.run("text.insert", json!({"text": "More "})).unwrap();
+        assert!(a.session.dirty);
+        let (name, bytes) = a.snapshot_bytes().unwrap();
+        assert!(name.ends_with(".docx") && bytes.starts_with(b"PK"), "{name}");
+        assert!(a.session.dirty, "a snapshot is not a save");
+        a.session.dirty = false;
+        a.mark_unsaved();
+        assert!(a.session.dirty);
+        a.dialog = Some(dialogs::Dialog::Zoom { percent: 100.0 });
+        assert!(a.host_document_ready(), "a Zoom dialog doesn't hold up a snapshot");
     }
 
     fn locked_app() -> WordApp {

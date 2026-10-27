@@ -243,6 +243,71 @@ impl FontDb {
         Ok(Installed { font, warning })
     }
 
+    /// Add the font file `bytes` for a host page that names its family (the admin's font list),
+    /// and let it win: its faces go by `family` (as well as their own names), and a face of the
+    /// same family and style that is already loaded, a bundled one included, is replaced by it, as
+    /// a `FontFace` the page registers beats an installed font in a browser. The file's own
+    /// typographic family still finds it, but a legacy family name it had ("Roboto Light") does not.
+    /// A replaced bundled fallback face stays what [`FontDb::face`] falls back to. Lookups made before
+    /// are forgotten ([`FontDb::generation`]). Kept for this run only, not listed as a user font.
+    /// Returns how many faces went in.
+    pub fn install_uploaded_font(&self, family: &str, bytes: &[u8]) -> Result<usize, UserFontError> {
+        let family: String = family.trim().chars().take(super::MAX_FAMILY_NAME).collect();
+        if family.is_empty() {
+            return Err(UserFontError::Unusable("no family name".into()));
+        }
+        let sfnt = decode_font_file(bytes)?;
+        if FileRef::new(&sfnt).is_err() {
+            return Err(UserFontError::Unusable("not a valid OpenType file".into()));
+        }
+        let found = enumerate_faces(&sfnt);
+        if found.is_empty() {
+            return Err(UserFontError::Unusable("no face with a family name".into()));
+        }
+        if found.len() > MAX_FACES_PER_FILE {
+            return Err(UserFontError::Unusable(format!("more than {MAX_FACES_PER_FILE} faces")));
+        }
+        let data = Arc::new(sfnt);
+        let mut new = Vec::new();
+        for f in found {
+            let label = format!("{} {}", f.family, f.style);
+            let mut face = make_face(FontBytes::Owned(data.clone()), f.index, f.family, f.style, f.legacy, f.coords)
+                .ok_or_else(|| UserFontError::Unusable(format!("{label} doesn't parse")))?;
+            if face.skrifa().is_none_or(|s| s.charmap().mappings().next().is_none()) {
+                return Err(UserFontError::Unusable(format!("{label} maps no characters")));
+            }
+            face.local_names = f.local;
+            // The page's name is the one documents and the font list use; the file's own typographic
+            // family stays as the legacy family, which `find` tries only when no typographic family
+            // matches. A legacy family the file had of its own is no longer a name for it.
+            if !face.family.eq_ignore_ascii_case(&family) {
+                face.legacy_family = face.family.clone();
+                face.family.clone_from(&family);
+            }
+            new.push(Arc::new(face));
+        }
+        let count = new.len();
+        {
+            let mut faces = self.faces.write().unwrap_or_else(|e| e.into_inner());
+            let (gone, kept): (Vec<_>, Vec<_>) =
+                faces.drain(..).partition(|g| new.iter().any(|f| g.family.eq_ignore_ascii_case(&f.family) && g.style.eq_ignore_ascii_case(&f.style)));
+            *faces = kept;
+            // A replaced bundled fallback face stays the last resort of `face()`: only text that
+            // names the upload gets it, as with a `FontFace` in a browser. A second upload keeps
+            // the first one's record (the bundled face, not the earlier upload).
+            let mut baseline = self.replaced_fallback.write().unwrap_or_else(|e| e.into_inner());
+            for g in gone.into_iter().filter(|g| g.family.eq_ignore_ascii_case(super::FALLBACK_FAMILY)) {
+                if !baseline.iter().any(|b| b.style.eq_ignore_ascii_case(&g.style)) {
+                    baseline.push(g);
+                }
+            }
+            drop(baseline);
+            faces.extend(new);
+        }
+        self.fonts_changed();
+        Ok(count)
+    }
+
     /// Add the fonts a document embeds (#1171) for this run: not recorded as user fonts, never
     /// stored. Faces already available are kept. Lookups made while the family was missing are
     /// forgotten ([`FontDb::generation`]), so text set in it now resolves to it. Each file comes
@@ -602,6 +667,68 @@ pub(crate) mod tests {
         assert!(g != 0);
         assert_eq!(face.advance(g), src.advance(src.glyph_for('W')));
         assert_eq!(db.user_fonts().len(), 1);
+    }
+
+    #[test]
+    fn an_uploaded_font_replaces_a_loaded_one_of_the_same_family_and_style() {
+        let db = db();
+        let before = db.face("Source Sans 3", "Regular").id();
+        let gen0 = db.generation();
+        // Another family's file sent as "Source Sans 3": it takes the bundled face's place.
+        let bytes = renamed("SourceSans3-Regular.ttf", FAMILY);
+        assert_eq!(db.install_uploaded_font("Source Sans 3", &bytes).unwrap(), 1);
+        assert!(db.generation() > gen0);
+        let after = db.face("Source Sans 3", "Regular");
+        assert_ne!(after.id(), before);
+        // The page's name finds it, and so does the file's own.
+        assert!(db.has_family("Source Sans 3") && db.has_family(FAMILY));
+        assert_eq!(db.face(FAMILY, "Regular").id(), after.id());
+        // Names nothing has still draw in the bundled fallback, not in the upload.
+        let unknown = db.face("No Such Font", "Regular");
+        assert_ne!(unknown.id(), after.id());
+        assert_eq!(unknown.id(), before);
+        assert!(matches!(db.install_uploaded_font(" ", &bytes), Err(UserFontError::Unusable(_))));
+    }
+
+    /// The PPM build bundles NanumGothic; uploading it again must leave it in the font list (a
+    /// Korean interface lists it by its Korean name, which sorts after the Latin names).
+    #[test]
+    fn an_uploaded_font_of_a_bundled_family_stays_in_the_font_list() {
+        let db = db();
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ppm/fonts-ko/fonts/nanum-gothic/NanumGothic-Regular.ttf");
+        let bytes = std::fs::read(path).unwrap();
+        // As the PPM build has it: the same family loaded already.
+        db.install_uploaded_font("NanumGothic", &bytes).unwrap();
+        assert_eq!(db.install_uploaded_font("NanumGothic", &bytes).unwrap(), 1, "a second upload replaces it again");
+        assert!(db.families().iter().any(|f| f == "NanumGothic"));
+        let ko = db.families_in("ko");
+        let at = ko.iter().position(|f| f == "NanumGothic" || f == "나눔고딕").unwrap_or_else(|| panic!("{ko:?}"));
+        // A Korean name sorts after every Latin one: last in the list, below the visible part of the menu.
+        if ko[at] == "나눔고딕" {
+            assert_eq!(at, ko.len() - 1, "{ko:?}");
+        }
+        assert!(db.has_family("NanumGothic") && db.is_loaded("NanumGothic"));
+        assert_eq!(db.styles("NanumGothic"), vec!["Regular".to_string()]);
+    }
+
+    /// With the PPM font set (`CRAFT_FONTS_DIR=ppm/fonts-ko`, as `ppm/build-web.sh` sets it) NanumGothic
+    /// is a bundled face and is listed; uploading it replaces that face and it stays listed. Does
+    /// nothing in a build without the font set.
+    #[test]
+    fn the_ppm_font_set_lists_nanum_gothic_before_and_after_an_upload() {
+        let db = db();
+        let Some(nanum) = crate::CRAFT_FONTS.iter().find(|f| f.family == "NanumGothic") else {
+            eprintln!("skipped: CRAFT_FONTS_DIR was not set at build time");
+            return;
+        };
+        assert!(db.families().iter().any(|f| f == "NanumGothic"), "bundled, so listed");
+        let before = db.face("NanumGothic", "Regular").id();
+        assert_eq!(db.install_uploaded_font("NanumGothic", nanum.bytes).unwrap(), 1);
+        assert_ne!(db.face("NanumGothic", "Regular").id(), before, "the upload replaced the bundled face");
+        assert!(db.families().iter().any(|f| f == "NanumGothic"));
+        // A Korean interface lists it by its Korean name, after every Latin name: the last row.
+        let ko = db.families_in("ko");
+        assert_eq!(ko.last().map(String::as_str), Some("나눔고딕"), "{ko:?}");
     }
 
     #[test]

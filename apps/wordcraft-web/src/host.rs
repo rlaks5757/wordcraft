@@ -19,11 +19,30 @@
 //! - `wordcraft:table-failed` (to the parent): `{ id, error }` when it couldn't (bad rows, a
 //!   document that refuses the table).
 //!
+//! - `wordcraft:request-bytes` (from the parent): `{ id, purpose }`, purpose `"save"`, `"check"` or
+//!   `"preview"`. The document as it is now, in the format Save writes.
+//! - `wordcraft:bytes` (to the parent): `{ id, purpose, name, bytes }` (a transferred `ArrayBuffer`).
+//!   For `"save"` the document counts as saved, as with File › Save (no `wordcraft:save` goes out);
+//!   `"check"` and `"preview"` change nothing in the app.
+//! - `wordcraft:bytes-failed` (to the parent): `{ id, purpose, reason }`; `reason` is `not-ready`
+//!   (no document from the parent is open yet, or another is still opening), `bad-request`, or the
+//!   error text of the failed save.
+//! - `wordcraft:add-fonts` (from the parent): `{ id, fonts: [{ family, bytes, format }] }`, each
+//!   font file (`format` `"ttf"` or `"otf"`; the file's own data decides) added to the font list and
+//!   the layout, before or after a document opens. The font goes by `family` (and by its own
+//!   names), and replaces a loaded face of the same family and style, a bundled one too, like a
+//!   `FontFace` in the parent page. A family sent before is not added twice.
+//! - `wordcraft:fonts-added` (to the parent): `{ id, installed, failed }`, family names.
+//!   `installed` means the uploaded font is the one drawn; `failed` fonts are unusable.
+//! - Ctrl/Cmd+S sends `wordcraft:save` as File › Save does and never opens the browser's own
+//!   "save page" dialog.
+//!
 //! Only the parent window on the page's own origin is heard or answered. With a parent on another
 //! origin there is no bridge: the app runs as if unframed. In host mode the page starts on an
 //! empty document (no Start screen, no sample).
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use wasm_bindgen::JsCast as _;
@@ -42,6 +61,43 @@ const MAX_PENDING_TABLES: usize = 16;
 /// The longest request id taken from the parent.
 const MAX_ID_BYTES: usize = 200;
 
+/// The longest purpose text echoed back to the parent.
+const MAX_PURPOSE_CHARS: usize = 200;
+
+/// Most byte requests waiting for the next frame; more are dropped.
+const MAX_PENDING_BYTES: usize = 16;
+
+/// Most fonts one `add-fonts` message may carry, and the most bytes of all of them together.
+const MAX_FONTS_PER_MESSAGE: u32 = 64;
+const MAX_FONT_BYTES_PER_MESSAGE: usize = 200 << 20;
+
+/// Why the parent wants the document's bytes.
+#[derive(Clone, Copy, PartialEq)]
+enum Purpose {
+    Save,
+    Check,
+    Preview,
+}
+
+impl Purpose {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "save" => Some(Self::Save),
+            "check" => Some(Self::Check),
+            "preview" => Some(Self::Preview),
+            _ => None,
+        }
+    }
+}
+
+/// A byte request from the parent: its id, and the purpose as sent (kept for the answer) with
+/// what it parsed to.
+struct BytesRequest {
+    id: String,
+    purpose_text: String,
+    purpose: Option<Purpose>,
+}
+
 /// A table the parent asked for: its request id and the rows, or why they couldn't be read.
 struct TableRequest {
     id: String,
@@ -57,6 +113,14 @@ pub struct Bridge {
     reported: Rc<Cell<Option<bool>>>,
     /// Tables from the parent not yet inserted.
     tables: Rc<RefCell<Vec<TableRequest>>>,
+    /// Byte requests from the parent not yet answered.
+    byte_requests: Rc<RefCell<Vec<BytesRequest>>>,
+    /// While a `save` request runs, the file the app hands to `download` is kept here instead of
+    /// being sent as `wordcraft:save`.
+    capturing: Rc<Cell<bool>>,
+    captured: Rc<RefCell<Option<(String, Vec<u8>)>>>,
+    /// Font families already added (lower case), so a repeat is not added again.
+    fonts: Rc<RefCell<HashSet<String>>>,
 }
 
 impl Bridge {
@@ -72,7 +136,17 @@ impl Bridge {
         if parent.location().origin().ok()? != origin {
             return None;
         }
-        Some(Self { window, parent, origin, reported: Rc::default(), tables: Rc::default() })
+        Some(Self {
+            window,
+            parent,
+            origin,
+            reported: Rc::default(),
+            tables: Rc::default(),
+            byte_requests: Rc::default(),
+            capturing: Rc::default(),
+            captured: Rc::default(),
+            fonts: Rc::default(),
+        })
     }
 
     /// Send saved and exported files to the parent instead of downloading them, report the dirty
@@ -85,6 +159,7 @@ impl Bridge {
         services.host_inbox = Some(host_inbox.clone());
         services.host_policy = Some(policy.clone());
         self.listen(host_inbox, policy, ctx);
+        self.block_page_save();
         let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes)));
         // The app tells the dirty flag after each pass; the parent hears it when it changes.
@@ -127,6 +202,120 @@ impl Bridge {
         }
     }
 
+    /// Before each pass: answer the parent's byte requests. A `save` runs File › Save, so the
+    /// document counts as saved as it does for the user's own Save; the file goes to the parent in
+    /// `wordcraft:bytes` instead of `wordcraft:save`. `check` and `preview` only read the document.
+    pub fn deliver_bytes(&self, app: &mut WordApp) {
+        for BytesRequest { id, purpose_text, purpose } in std::mem::take(&mut *self.byte_requests.borrow_mut()) {
+            let Some(purpose) = purpose else {
+                self.bytes_failed(&id, &purpose_text, "bad-request");
+                continue;
+            };
+            if !app.host_document_ready() {
+                self.bytes_failed(&id, &purpose_text, "not-ready");
+                continue;
+            }
+            let is_save = purpose == Purpose::Save;
+            let file = if is_save {
+                self.capturing.set(true);
+                let saved = app.run("file.save", serde_json::json!({}));
+                self.capturing.set(false);
+                let captured = self.captured.borrow_mut().take();
+                saved.map_err(|e| e.to_string()).and_then(|_| captured.ok_or_else(|| "the save produced no file".to_string()))
+            } else {
+                app.snapshot_bytes()
+            };
+            let sent = file.and_then(|(name, bytes)| self.post_bytes(&id, &purpose_text, &name, &bytes));
+            if let Err(e) = sent {
+                // The save marked the document saved before the file went out: the parent never
+                // got it, so the document has unsaved changes again.
+                if is_save {
+                    app.mark_unsaved();
+                }
+                self.bytes_failed(&id, &purpose_text, &e);
+            }
+        }
+    }
+
+    fn bytes_failed(&self, id: &str, purpose: &str, reason: &str) {
+        self.send(&[("type", "wordcraft:bytes-failed".into()), ("id", id.into()), ("purpose", purpose.into()), ("reason", reason.into())]);
+    }
+
+    fn post_bytes(&self, id: &str, purpose: &str, name: &str, bytes: &[u8]) -> Result<(), String> {
+        let buffer = js_sys::Uint8Array::from(bytes).buffer();
+        let message = message(&[
+            ("type", "wordcraft:bytes".into()),
+            ("id", id.into()),
+            ("purpose", purpose.into()),
+            ("name", name.into()),
+            ("bytes", buffer.clone().into()),
+        ])
+        .ok_or_else(|| "couldn't build the message".to_string())?;
+        self.parent
+            .post_message_with_transfer(&message, &self.origin, &js_sys::Array::of1(&buffer))
+            .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
+    }
+
+    /// Add the fonts of an `add-fonts` message to the font list and answer with how each went.
+    /// The font list changes at once; the open document is laid out again on the next pass.
+    fn add_fonts(&self, data: &JsValue, id: &str) {
+        let (mut installed, mut failed) = (Vec::new(), Vec::new());
+        let list = js_sys::Reflect::get(data, &JsValue::from_str("fonts")).ok().filter(js_sys::Array::is_array).map(|f| js_sys::Array::from(&f));
+        let mut total = 0usize;
+        for (i, font) in list.iter().flat_map(|l| l.iter()).enumerate() {
+            let family = string(&font, "family").map(|f| f.trim().to_string()).unwrap_or_default();
+            let label = if family.is_empty() { format!("#{i}") } else { family.clone() };
+            if i as u32 >= MAX_FONTS_PER_MESSAGE || family.is_empty() {
+                failed.push(label);
+                continue;
+            }
+            // A family sent before is already there.
+            if self.fonts.borrow().contains(&family.to_lowercase()) {
+                installed.push(family);
+                continue;
+            }
+            let Some(bytes) =
+                bytes(&font).filter(|b| b.len() <= wordcraft_fonts::MAX_FONT_FILE_BYTES && total + b.len() <= MAX_FONT_BYTES_PER_MESSAGE)
+            else {
+                failed.push(label);
+                continue;
+            };
+            total += bytes.len();
+            // The font goes by the parent's family name and wins over a loaded font of that name.
+            match wordcraft_fonts::FontDb::global().install_uploaded_font(&family, &bytes) {
+                Ok(_) => {
+                    self.fonts.borrow_mut().insert(family.to_lowercase());
+                    installed.push(family);
+                }
+                Err(e) => {
+                    log::warn!("font {family} skipped: {e}");
+                    failed.push(family);
+                }
+            }
+        }
+        log::info!("add-fonts {id}: installed {installed:?}, failed {failed:?}");
+        let strings = |v: Vec<String>| v.into_iter().map(JsValue::from).collect::<js_sys::Array>();
+        self.send(&[
+            ("type", "wordcraft:fonts-added".into()),
+            ("id", id.into()),
+            ("installed", strings(installed).into()),
+            ("failed", strings(failed).into()),
+        ]);
+    }
+
+    /// Ctrl/Cmd+S must not open the browser's "save page" dialog. eframe stops it for keys the
+    /// canvas hears; this also covers focus elsewhere in the frame. The app still gets the key.
+    fn block_page_save(&self) {
+        let on_key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(|event: web_sys::KeyboardEvent| {
+            if (event.ctrl_key() || event.meta_key()) && (event.code() == "KeyS" || event.key().eq_ignore_ascii_case("s")) {
+                event.prevent_default();
+            }
+        });
+        if self.window.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref()).is_ok() {
+            on_key.forget();
+        }
+    }
+
     fn report_dirty(&self, dirty: bool) {
         if self.reported.get() != Some(dirty) && self.send(&[("type", "wordcraft:dirty".into()), ("dirty", dirty.into())]) {
             self.reported.set(Some(dirty));
@@ -134,6 +323,11 @@ impl Bridge {
     }
 
     fn post_save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        if self.capturing.get() {
+            let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
+            *self.captured.borrow_mut() = Some((name, bytes.to_vec()));
+            return Ok(());
+        }
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
         let buffer = js_sys::Uint8Array::from(bytes).buffer();
         let message = message(&[("type", "wordcraft:save".into()), ("name", name.as_str().into()), ("bytes", buffer.clone().into())])
@@ -147,6 +341,8 @@ impl Bridge {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
         let tables = self.tables.clone();
+        let byte_requests = self.byte_requests.clone();
+        let bridge = self.clone();
         let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                 return;
@@ -165,6 +361,18 @@ impl Bridge {
                     if tables.borrow().len() < MAX_PENDING_TABLES {
                         tables.borrow_mut().push(TableRequest { id, rows: rows(&data) });
                     }
+                }
+                Some("wordcraft:request-bytes") => {
+                    let Some(id) = string(&data, "id").filter(|id| !id.is_empty() && id.len() <= MAX_ID_BYTES) else { return };
+                    let purpose_text: String = string(&data, "purpose").unwrap_or_default().chars().take(MAX_PURPOSE_CHARS).collect();
+                    if byte_requests.borrow().len() < MAX_PENDING_BYTES {
+                        let purpose = Purpose::parse(&purpose_text);
+                        byte_requests.borrow_mut().push(BytesRequest { id, purpose_text, purpose });
+                    }
+                }
+                Some("wordcraft:add-fonts") => {
+                    let Some(id) = string(&data, "id").filter(|id| !id.is_empty() && id.len() <= MAX_ID_BYTES) else { return };
+                    bridge.add_fonts(&data, &id);
                 }
                 _ => return,
             }
