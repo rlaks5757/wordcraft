@@ -131,7 +131,11 @@ impl Bridge {
         if parent.location().origin().ok()? != origin {
             return None;
         }
-        Some(Self { window, parent, origin, reported: Rc::default(),
+        Some(Self {
+            window,
+            parent,
+            origin,
+            reported: Rc::default(),
             tables: Rc::default(),
             byte_requests: Rc::default(),
             capturing: Rc::default(),
@@ -263,7 +267,9 @@ impl Bridge {
                 installed.push(family);
                 continue;
             }
-            let Some(bytes) = bytes(&font).filter(|b| b.len() <= wordcraft_fonts::MAX_FONT_FILE_BYTES && total + b.len() <= MAX_FONT_BYTES_PER_MESSAGE) else {
+            let Some(bytes) =
+                bytes(&font).filter(|b| b.len() <= wordcraft_fonts::MAX_FONT_FILE_BYTES && total + b.len() <= MAX_FONT_BYTES_PER_MESSAGE)
+            else {
                 failed.push(label);
                 continue;
             };
@@ -283,7 +289,12 @@ impl Bridge {
             }
         }
         let strings = |v: Vec<String>| v.into_iter().map(JsValue::from).collect::<js_sys::Array>();
-        self.send(&[("type", "wordcraft:fonts-added".into()), ("id", id.into()), ("installed", strings(installed).into()), ("failed", strings(failed).into())]);
+        self.send(&[
+            ("type", "wordcraft:fonts-added".into()),
+            ("id", id.into()),
+            ("installed", strings(installed).into()),
+            ("failed", strings(failed).into()),
+        ]);
     }
 
     /// Ctrl/Cmd+S must not open the browser's "save page" dialog. eframe stops it for keys the
