@@ -1135,6 +1135,8 @@ fn list_rows<'a>(
     ui.set_min_height(desired_h);
     let mut area = egui::ScrollArea::vertical().max_height(desired_h);
     if host_locked(ui.ctx()) {
+        // A solid bar (the floating one is too faint to notice) that is always there.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         area = area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
     }
     if let (Some(h), Some((offset, view_h))) = (highlight, scroll) {
