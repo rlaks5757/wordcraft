@@ -711,6 +711,26 @@ pub(crate) mod tests {
         assert_eq!(db.styles("NanumGothic"), vec!["Regular".to_string()]);
     }
 
+    /// With the PPM font set (`CRAFT_FONTS_DIR=ppm/fonts-ko`, as `ppm/build-web.sh` sets it) NanumGothic
+    /// is a bundled face and is listed; uploading it replaces that face and it stays listed. Does
+    /// nothing in a build without the font set.
+    #[test]
+    fn the_ppm_font_set_lists_nanum_gothic_before_and_after_an_upload() {
+        let db = db();
+        let Some(nanum) = crate::CRAFT_FONTS.iter().find(|f| f.family == "NanumGothic") else {
+            eprintln!("skipped: CRAFT_FONTS_DIR was not set at build time");
+            return;
+        };
+        assert!(db.families().iter().any(|f| f == "NanumGothic"), "bundled, so listed");
+        let before = db.face("NanumGothic", "Regular").id();
+        assert_eq!(db.install_uploaded_font("NanumGothic", nanum.bytes).unwrap(), 1);
+        assert_ne!(db.face("NanumGothic", "Regular").id(), before, "the upload replaced the bundled face");
+        assert!(db.families().iter().any(|f| f == "NanumGothic"));
+        // A Korean interface lists it by its Korean name, after every Latin name: the last row.
+        let ko = db.families_in("ko");
+        assert_eq!(ko.last().map(String::as_str), Some("나눔고딕"), "{ko:?}");
+    }
+
     #[test]
     fn the_bundled_baseline_is_never_replaced() {
         let db = db();
