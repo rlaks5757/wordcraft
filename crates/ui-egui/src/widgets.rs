@@ -1132,11 +1132,24 @@ fn list_rows<'a>(
     let mut out = None;
     let row_h = if preview.is_some() { COMBO_PREVIEW_ROW_H } else { ui.spacing().interact_size.y };
     let desired_h = (n as f32 * (row_h + ui.spacing().item_spacing.y)).min(420.0);
+    if host_locked(ui.ctx()) {
+        // Once per page: how many rows and how tall (the scroll bar's cause was in question).
+        static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            log::info!("font-list: n={n}, desired_h={desired_h}, locked=true");
+        }
+    }
     ui.set_min_height(desired_h);
     let mut area = egui::ScrollArea::vertical().max_height(desired_h);
     if host_locked(ui.ctx()) {
-        // A solid bar (the floating one is too faint to notice) that is always there.
-        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        // A solid bar that is always there. `solid()` draws its bar and handle at zero opacity until
+        // the pointer is near (dormant), which hides a bar that is merely always allocated.
+        let scroll = &mut ui.spacing_mut().scroll;
+        *scroll = egui::style::ScrollStyle::solid();
+        scroll.dormant_background_opacity = 0.5;
+        scroll.dormant_handle_opacity = 0.8;
+        scroll.active_background_opacity = 0.7;
+        scroll.active_handle_opacity = 1.0;
         area = area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
     }
     if let (Some(h), Some((offset, view_h))) = (highlight, scroll) {
