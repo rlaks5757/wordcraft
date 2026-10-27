@@ -690,6 +690,27 @@ pub(crate) mod tests {
         assert!(matches!(db.install_uploaded_font(" ", &bytes), Err(UserFontError::Unusable(_))));
     }
 
+    /// The PPM build bundles NanumGothic; uploading it again must leave it in the font list (a
+    /// Korean interface lists it by its Korean name, which sorts after the Latin names).
+    #[test]
+    fn an_uploaded_font_of_a_bundled_family_stays_in_the_font_list() {
+        let db = db();
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ppm/fonts-ko/fonts/nanum-gothic/NanumGothic-Regular.ttf");
+        let bytes = std::fs::read(path).unwrap();
+        // As the PPM build has it: the same family loaded already.
+        db.install_uploaded_font("NanumGothic", &bytes).unwrap();
+        assert_eq!(db.install_uploaded_font("NanumGothic", &bytes).unwrap(), 1, "a second upload replaces it again");
+        assert!(db.families().iter().any(|f| f == "NanumGothic"));
+        let ko = db.families_in("ko");
+        let at = ko.iter().position(|f| f == "NanumGothic" || f == "나눔고딕").unwrap_or_else(|| panic!("{ko:?}"));
+        // A Korean name sorts after every Latin one: last in the list, below the visible part of the menu.
+        if ko[at] == "나눔고딕" {
+            assert_eq!(at, ko.len() - 1, "{ko:?}");
+        }
+        assert!(db.has_family("NanumGothic") && db.is_loaded("NanumGothic"));
+        assert_eq!(db.styles("NanumGothic"), vec!["Regular".to_string()]);
+    }
+
     #[test]
     fn the_bundled_baseline_is_never_replaced() {
         let db = db();
