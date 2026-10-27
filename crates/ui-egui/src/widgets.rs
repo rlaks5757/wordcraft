@@ -1141,15 +1141,19 @@ fn list_rows<'a>(
     }
     ui.set_min_height(desired_h);
     let mut area = egui::ScrollArea::vertical().max_height(desired_h);
+    let mut bar_visuals = None;
     if host_locked(ui.ctx()) {
-        // A solid bar that is always there. `solid()` draws its bar and handle at zero opacity until
-        // the pointer is near (dormant), which hides a bar that is merely always allocated.
-        let scroll = &mut ui.spacing_mut().scroll;
-        *scroll = egui::style::ScrollStyle::solid();
-        scroll.dormant_background_opacity = 0.5;
-        scroll.dormant_handle_opacity = 0.8;
-        scroll.active_background_opacity = 0.7;
-        scroll.active_handle_opacity = 1.0;
+        // A solid bar that is always there. A solid bar is drawn opaque: its track in
+        // `extreme_bg_color` and its handle in `widgets.inactive.bg_fill`, which this theme sets to
+        // the menu's own fill, so it was there but invisible. The rows get the visuals back below.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        let t = Tokens::get(ui.ctx());
+        let v = ui.visuals_mut();
+        bar_visuals = Some(v.clone());
+        v.extreme_bg_color = t.hover;
+        v.widgets.inactive.bg_fill = t.text_dim;
+        v.widgets.hovered.bg_fill = t.text;
+        v.widgets.active.bg_fill = t.text;
         area = area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
     }
     if let (Some(h), Some((offset, view_h))) = (highlight, scroll) {
@@ -1170,6 +1174,9 @@ fn list_rows<'a>(
     }
     let fill = Tokens::get(ui.ctx()).checked;
     let shown = area.show_rows(ui, row_h, n, |ui, range| {
+        if let Some(v) = bar_visuals.take() {
+            *ui.visuals_mut() = v;
+        }
         ui.set_min_width(width + 60.0);
         for k in range {
             let it = match row(k) {
@@ -1885,5 +1892,41 @@ mod tests {
             assert_eq!(combo_list(ui, 52.0, "8", &items, None), None);
         })
         .drop_without_applying_deltas();
+    }
+
+    /// PPM: the font list's scroll bar is drawn in colours that differ from the menu's own fill
+    /// (the theme's input and menu fills are the same, which hid a solid bar), inside the list.
+    #[test]
+    fn a_host_locked_list_draws_a_visible_scroll_bar() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions(false, false));
+        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        set_host_locked(&ctx, true);
+        let items: Vec<String> = (0..19).map(|k| format!("Font {k}")).collect();
+        let mut area = Rect::NOTHING;
+        let mut out = None;
+        for _ in 0..3 {
+            if let Some(prev) = out.replace(ctx.run_ui(egui::RawInput::default(), |ui| {
+                area = ui.scope(|ui| combo_list(ui, 150.0, "", &items, None)).response.rect;
+            })) {
+                prev.drop_without_applying_deltas();
+            }
+        }
+        let out = out.expect("a frame ran");
+        let t = Tokens::light();
+        let menu = t.menu;
+        let fills: Vec<Rect> = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::epaint::Shape::Rect(r) if r.fill == t.text_dim => Some(r.rect),
+                _ => None,
+            })
+            .collect();
+        assert!(!fills.is_empty(), "no scroll bar handle drawn in the contrasting colour");
+        assert!(fills.iter().all(|r| area.contains_rect(r.shrink(0.1))), "handle {fills:?} outside the list {area:?}");
+        assert_ne!(t.text_dim, menu);
+        assert_ne!(t.hover, menu);
+        out.drop_without_applying_deltas();
     }
 }
